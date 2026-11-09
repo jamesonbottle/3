@@ -1,0 +1,2 @@
+// Embeds the manifest (visual styles / DPI awareness). Resource type 24 = RT_MANIFEST, id 1 = executable manifest.
+1 24 "app.manifest"

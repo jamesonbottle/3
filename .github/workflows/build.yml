@@ -1,0 +1,20 @@
+name: build
+on: [push, pull_request, workflow_dispatch]
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+      - name: Build
+        shell: cmd
+        run: build.bat
+      - name: Smoke test (console build, quick suite, 64 MB)
+        shell: cmd
+        run: build\ddr5test_cli.exe -mb 64 -t 2 --quick --minutes 1 --no-large-pages
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ddr5ramtest
+          path: |
+            build/ddr5ramtest.exe
+            build/ddr5test_cli.exe
