@@ -38,6 +38,7 @@ struct App {
     std::vector<HWND> lockWhileRunning;
     std::unique_ptr<Run> run; std::thread worker; std::atomic<bool> busy{false};
     double endT = 0; u64 lastErr = 0; bool stopRequested = false;
+    bool mbAuto = true, setting = true;   // mbAuto: Megabytes follows free RAM and thread count until the user types a value
     std::mutex logMu; FILE* log = nullptr; std::string lastLine;
     std::unordered_map<HWND, std::wstring> shown;   // last text per control, to avoid flicker
     u64 totalMB = 0;
@@ -99,6 +100,16 @@ void refresh() {
     else if (!A.stopRequested && err == 0 && R.tStart > 0) setText(A.hTest, L"Finished");
 }
 
+// ~90% of free RAM, rounded down so every thread gets the same whole number of 2 MB blocks (no unused remainder)
+u64 auto_mb(int threads) {
+    MEMORYSTATUSEX m{}; m.dwLength = sizeof m; GlobalMemoryStatusEx(&m);
+    u64 want = (m.ullAvailPhys >> 20) / 100 * 90, step = (u64)std::max(1, threads) * 2;
+    return std::max<u64>(want / step * step, 64);
+}
+void apply_auto_mb() {
+    wchar_t b[32]; GetWindowTextW(A.hThr, b, 32); int t = _wtoi(b); if (t < 1) t = std::max(1, plat::ncpu());
+    A.setting = true; SetWindowTextW(A.hMB, std::to_wstring(auto_mb(t)).c_str()); A.setting = false;
+}
 u64 read_uint(HWND edit, u64 lo, u64 hi, u64 def) {
     wchar_t b[32]; GetWindowTextW(edit, b, 32); u64 v = (u64)_wtoi64(b); if (!v) v = def; return std::min(std::max(v, lo), hi);
 }
@@ -108,9 +119,10 @@ void start_run() {
     if (A.worker.joinable()) A.worker.join();
     Settings s;
     int cpus = std::max(1, plat::ncpu());
-    s.megabytes = read_uint(A.hMB, 64, std::max<u64>(A.totalMB, 64), 64);
     s.threads = (int)read_uint(A.hThr, 1, 256, (u64)cpus);
-    SetWindowTextW(A.hMB, std::to_wstring(s.megabytes).c_str());
+    wchar_t mbt[32]; GetWindowTextW(A.hMB, mbt, 32);
+    s.megabytes = (A.mbAuto || _wtoi64(mbt) <= 0) ? auto_mb(s.threads) : read_uint(A.hMB, 64, std::max<u64>(A.totalMB, 64), 64);
+    A.setting = true; SetWindowTextW(A.hMB, std::to_wstring(s.megabytes).c_str()); A.setting = false;
     SetWindowTextW(A.hThr, std::to_wstring(s.threads).c_str());
     s.stopOnError = SendMessageW(A.hStopErr, BM_GETCHECK, 0, 0) == BST_CHECKED;
     s.cacheMode = std::max(0, (int)SendMessageW(A.hCache, CB_GETCURSEL, 0, 0));
@@ -231,7 +243,7 @@ void build_ui() {
     SendMessageW(A.hThrUd, UDM_SETBUDDY, (WPARAM)A.hThr, 0); SendMessageW(A.hThrUd, UDM_SETRANGE32, 1, 256); SendMessageW(A.hThrUd, UDM_SETPOS32, 0, cpus);
 
     A.lockWhileRunning = {A.hMB, A.hMBud, A.hThr, A.hThrUd, A.hStopErr, A.hCache, A.hRng, A.hSet, A.hFpu};
-    show_page(0); refresh();
+    show_page(0); refresh(); apply_auto_mb(); A.setting = false;
 }
 
 void apply_caption_style(HWND h) {   // dark red caption like the reference window (Windows 11 only; silently ignored elsewhere)
@@ -255,6 +267,10 @@ LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
     }
     case WM_COMMAND:
+        if (HIWORD(wp) == EN_CHANGE && !A.setting) {
+            if (LOWORD(wp) == ID_MB) { wchar_t b[32]; GetWindowTextW(A.hMB, b, 32); A.mbAuto = b[0] == 0; if (A.mbAuto) apply_auto_mb(); }  // typed a value = manual; cleared = automatic
+            else if (LOWORD(wp) == ID_THR && A.mbAuto) apply_auto_mb();   // thread count changed: refill memory automatically
+        }
         if (LOWORD(wp) == ID_START && HIWORD(wp) == BN_CLICKED) { if (A.busy.load()) request_stop(); else start_run(); }
         return 0;
     case WM_RUN_DONE: on_run_done((int)wp); return 0;

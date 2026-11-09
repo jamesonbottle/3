@@ -7,7 +7,7 @@ The window follows the familiar two-tab layout (Testing / Advanced) used by popu
 ## Use
 
 1. Run `ddr5ramtest.exe`. Close other programs first.
-2. Pick *Megabytes* (default: 90 % of free RAM) and *Threads* (default: logical CPUs).
+2. Pick *Threads* (default: logical CPUs). *Megabytes* fills itself with ~90 % of free RAM, split evenly per thread, and follows the thread count; type a value to override it, or clear the box to go back to automatic.
 3. Press **Start**. It runs until you press **Stop**. Coverage is how many times the tested region has been verified (100 % = one full pass; it keeps counting past that).
 4. Any error is written to `ddr5ramtest.log` next to the exe, with address, expected/actual data, which DQ lane/beat and which 128-bit on-die-ECC word was hit, and whether a re-read shows it as transient, stable or unstable.
 
