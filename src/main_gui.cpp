@@ -16,6 +16,7 @@
   #pragma comment(lib, "comctl32.lib")
   #pragma comment(lib, "user32.lib")
   #pragma comment(lib, "gdi32.lib")
+  #pragma comment(lib, "advapi32.lib")
 #endif
 
 namespace {

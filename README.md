@@ -40,7 +40,7 @@ Output in `build\`: `ddr5ramtest.exe` (GUI) and `ddr5test_cli.exe` (same engine,
 
 ```
 windres src/app.rc -O coff -o app.res.o
-g++ -std=c++20 -O2 -mavx2 -mwindows -static -pthread -Isrc src/main_gui.cpp app.res.o -o ddr5ramtest.exe -lcomctl32 -lgdi32 -luser32
+g++ -std=c++20 -O2 -mavx2 -mwindows -static -pthread -Isrc src/main_gui.cpp app.res.o -o ddr5ramtest.exe -lcomctl32 -lgdi32 -luser32 -ladvapi32
 ```
 
 GitHub Actions builds both on `windows-latest` and uploads them as artifacts.

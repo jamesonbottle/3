@@ -7,6 +7,9 @@
 //
 // The test suite is compiled in: suite.cfg -> tools/gen_suite.py -> suite_data.h. No config file is read at run time.
 
+#if defined(_MSC_VER)
+  #pragma comment(lib, "advapi32.lib")
+#endif
 #include <algorithm>
 #include <array>
 #include <atomic>
