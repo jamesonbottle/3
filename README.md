@@ -9,7 +9,9 @@ The window follows the familiar two-tab layout (Testing / Advanced) used by popu
 1. Run `ddr5ramtest.exe`. Close other programs first.
 2. Pick *Threads* (default: logical CPUs). *Megabytes* fills itself with ~90 % of free RAM, split evenly per thread, and follows the thread count; type a value to override it, or clear the box to go back to automatic.
 3. Press **Start**. It runs until you press **Stop**. Coverage is how many times the tested region has been verified (100 % = one full pass; it keeps counting past that).
-4. Any error is written to `ddr5ramtest.log` next to the exe, with address, expected/actual data, which DQ lane/beat and which 128-bit on-die-ECC word was hit, and whether a re-read shows it as transient, stable or unstable.
+4. Any error is written to `ddr5ramtest.log` next to the exe (or to `%TEMP%` if that folder is not writable - the status line says which), with address, expected/actual data, which DQ lane/beat was hit, which x8-device on-die-ECC codeword that would be *if* the DIMM uses x8 chips and the controller does not swizzle lanes (a heuristic, see *Honest limits*), and whether a re-read shows it as transient, stable or unstable.
+
+*Stop on error* is ticked by default, so the run ends at the first error; untick it to keep going and collect statistics (error counts per lane/beat/address bit). The console tool defaults to the opposite and reports its result in the exit code (0 = clean, 1 = errors found, 2 = could not start, 3 = internal error); with `--test-seconds N` it caps the timed tests, and when its output is piped it prints a progress line every 30 s instead of the live line.
 
 Advanced tab
 - **CPU cache**: Default (each test decides), Bypass (clflush every access so reads come from DRAM), Cached, Non-temporal (streaming stores).
@@ -19,7 +21,7 @@ Advanced tab
 
 ## What is tested
 
-27 tests (87 consolidated into 35 by turning near-duplicates into list sweeps, audited for usefulness and trimmed, plus 3 modelled on Google's stressapptest) built around how DDR5 behaves: BL16 64-byte bursts over two 32-bit subchannels, bank groups (tCCD_L/S, tRRD, tFAW), row open/close (tRCD/tRP/tRAS/tRC), bus turnaround (tWTR/tRTW), refresh and retention (tREFI/tRFC/tREFW pauses), DQ lane crosstalk and pattern-sensitivity styles, address-decode tests, pointer-chase latency stress, and read/write mixes. Read `suite.cfg` for the full list; each block has a name.
+27 tests (87 consolidated into 35 by turning near-duplicates into list sweeps, audited for usefulness and trimmed, plus 3 modelled on Google's stressapptest) built around how DDR5 behaves: BL16 64-byte bursts over two 32-bit subchannels, bank groups (tCCD_L/S, tRRD, tFAW), row open/close (tRCD/tRP/tRAS/tRC), bus turnaround (tWTR/tRTW), long idle gaps between write and verify (refresh keeps running during them, so this is an idle soak, not a retention-time test), DQ lane crosstalk and pattern-sensitivity styles, address-decode tests, pointer-chase latency stress, and read/write mixes. Read `suite.cfg` for the full list; each block has a name.
 
 Ideas taken from [stressapptest](https://github.com/stressapptest/stressapptest) (reimplemented from its public description, no code copied):
 - **Pattern table**: walking ones / inverse-alternating ones / zeros, 0/1, 5/A, 8b10b-style, "busy" patterns, each held for 1/2/4/8 words (32 to 256-bit bus-width repeat) and inverted too.
@@ -30,7 +32,17 @@ Ideas taken from [stressapptest](https://github.com/stressapptest/stressapptest)
 
 - User-mode software cannot read or set DDR5 timings, voltage or temperature, and cannot see physical addresses. These tests *stress access patterns that exercise those timings*; they do not verify a timing value.
 - On-die ECC can silently correct single-bit errors, so a clean run does not prove perfect cells. Errors that do appear are the ones ODECC could not hide.
-- Results were checked with a fault-injection build (injected bit flips are detected) and a Linux run, **not on real DDR5 hardware**. No claim is made that this finds errors faster than any other tester; compare on your own failing configurations.
+- The lane / beat / codeword attribution assumes cache-line byte order equals burst order and (for the codeword) x8 DRAM chips. Memory-controller data scrambling and board lane swaps are invisible to user-mode code, so treat these as hints for comparing runs, not as a map of the hardware. The same scrambling means the "DQ lane" patterns are not guaranteed to appear on the wire as named.
+- **Coverage** counts verified bytes (100 % = as many bytes verified as the tested region holds). The windowed tests rotate over windows that together cover the whole region, including its tail, but the counter itself does not track which addresses were touched.
+- Results were checked with the self-test below (unit tests, clean runs, a fault-injection build whose planted bit flips must be found) on Linux, **not on real DDR5 hardware**. No claim is made that this finds errors faster than any other tester; compare on your own failing configurations.
+
+## Self-test
+
+```
+tools/selftest.sh        # Linux, g++ 11+ with AVX2; takes ~2 minutes; exits non-zero on any failure
+```
+
+It builds the engine twice (normal, and with `-DDDR5TEST_INJECT`, which plants known bit flips between write and verify), then checks that address orders are true permutations, that the rotating windows cover the whole region, that clean runs of 14 representative tests report nothing, and that the injected faults are found exactly (42 lines / 44 bits in the pattern test, plus the page-shuffle and coherency injections) without hanging in stop-on-error mode. It runs in CI on every push. It proves the detection logic; it cannot prove anything about a particular DIMM.
 - Closed-source testers' internals are not public, so nothing here is derived from them.
 
 ## Build
@@ -61,4 +73,7 @@ src/engine.h       test engine (header-only)
 src/main_gui.cpp   Win32 GUI          src/main_cli.cpp   console front-end
 src/suite_data.h   generated from suite.cfg
 src/app.rc, app.manifest   visual styles + DPI awareness
+tools/gen_suite.py         suite.cfg -> suite_data.h
+tools/unit_tests.cpp       unit tests of orders / windows / generators / suite parsing
+tools/selftest.sh          unit tests + clean runs + fault injection (see Self-test)
 ```

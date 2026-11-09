@@ -1,10 +1,17 @@
 // ddr5test CLI front-end (console). Same engine and built-in suite as the GUI; used for headless runs and for development on Linux.
 #include "engine.h"
+#ifdef _WIN32
+  #include <io.h>
+  #define IS_TTY(fd) _isatty(fd)
+#else
+  #define IS_TTY(fd) isatty(fd)
+#endif
 
 static void usage() {
     puts("ddr5test_cli [-mb MB] [-t threads] [-l loops] [-f name-filter] [--quick] [--coverage PCT] [--minutes N]\n"
-         "             [--cache default|bypass|cached|nt] [--rng default|splitmix|murmur|xorshift] [--fpu]\n"
-         "             [--keep-going] [--no-large-pages] [--log FILE] [--list]");
+         "             [--test-seconds N] [--cache default|bypass|cached|nt] [--rng default|splitmix|murmur|xorshift] [--fpu]\n"
+         "             [--keep-going | --stop-on-error] [--no-large-pages] [--log FILE] [--list]\n"
+         "exit code: 0 = no errors, 1 = memory errors found, 2 = could not start (bad option / not enough memory), 3 = internal error");
 }
 
 int main(int argc, char** argv) {
@@ -18,6 +25,7 @@ int main(int argc, char** argv) {
         else if (a == "--quick") s.suite = 1;
         else if (a == "--coverage") s.coverageStop = strtoull(nx().c_str(), nullptr, 10);
         else if (a == "--minutes") s.minutes = atof(nx().c_str());
+        else if (a == "--test-seconds") s.testSeconds = strtoull(nx().c_str(), nullptr, 10);
         else if (a == "--cache") { std::string v = lower(nx()); s.cacheMode = v == "bypass" ? 1 : v == "cached" ? 2 : v == "nt" ? 3 : 0; }
         else if (a == "--rng") { std::string v = lower(nx()); s.rngMode = v == "splitmix" ? 1 : v == "murmur" ? 2 : v == "xorshift" ? 3 : 0; }
         else if (a == "--fpu") s.stressFpu = true;
@@ -33,7 +41,7 @@ int main(int argc, char** argv) {
         int n = 0; for (auto& t : tests) printf("%3d %s %-8s %s\n", ++n, t.p.flag("quick", false) ? "Q" : " ", t.p.str("algo", "fill").c_str(), t.name.c_str());
         return 0;
     }
-    g_console = true;
+    g_console = true; g_tty = IS_TTY(1) != 0;
     static Run R; plat::install_ctrlc(&R.stop);
     return run_suite(s, R);
 }

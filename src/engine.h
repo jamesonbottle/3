@@ -94,8 +94,18 @@ static std::atomic<bool>* g_stop = nullptr;
 #ifdef _WIN32
 static BOOL WINAPI ctrl(DWORD) { if (g_stop) g_stop->store(true); return TRUE; }
 void install_ctrlc(std::atomic<bool>* s) { g_stop = s; SetConsoleCtrlHandler(ctrl, TRUE); }
-int ncpu() { return (int)std::thread::hardware_concurrency(); }
-void pin(int cpu) { if (cpu < 64) SetThreadAffinityMask(GetCurrentThread(), 1ull << cpu); }
+int ncpu() { DWORD n = GetActiveProcessorCount(ALL_PROCESSOR_GROUPS); return n ? (int)n : (int)std::thread::hardware_concurrency(); }
+// Pin thread number `cpu` to logical CPU `cpu`, counting across processor groups (Windows splits machines with >64 logical CPUs into groups).
+void pin(int cpu) {
+    WORD ng = GetActiveProcessorGroupCount();
+    if (ng <= 1) { if (cpu < 64) SetThreadAffinityMask(GetCurrentThread(), 1ull << cpu); return; }
+    int idx = cpu;
+    for (WORD g = 0; g < ng; g++) {
+        int n = (int)GetActiveProcessorCount(g);
+        if (idx < n) { GROUP_AFFINITY ga{}; ga.Group = g; ga.Mask = (KAFFINITY)1 << idx; SetThreadGroupAffinity(GetCurrentThread(), &ga, nullptr); return; }
+        idx -= n;
+    }
+}
 u64 avail_phys() { MEMORYSTATUSEX m{}; m.dwLength = sizeof(m); GlobalMemoryStatusEx(&m); return m.ullAvailPhys; }
 u64 total_phys() { MEMORYSTATUSEX m{}; m.dwLength = sizeof(m); GlobalMemoryStatusEx(&m); return m.ullTotalPhys; }
 void lower_priority() { SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL); }
@@ -106,20 +116,21 @@ static bool lock_priv() {
     AdjustTokenPrivileges(t, FALSE, &tp, 0, nullptr, nullptr);
     bool ok = GetLastError() == ERROR_SUCCESS; CloseHandle(t); return ok;
 }
-void* alloc(u64 bytes, bool large, bool& got) {
-    got = false;
+// got = large pages obtained; locked = the memory is really pinned in RAM (large pages always are; otherwise VirtualLock/mlock must have succeeded)
+void* alloc(u64 bytes, bool large, bool& got, bool& locked) {
+    got = false; locked = false;
     if (large && lock_priv()) {
         SIZE_T lp = GetLargePageMinimum();
         if (lp) {
             u64 b = (bytes + lp - 1) / lp * lp;
             void* p = VirtualAlloc(nullptr, b, MEM_RESERVE | MEM_COMMIT | MEM_LARGE_PAGES, PAGE_READWRITE);
-            if (p) { got = true; return p; }
+            if (p) { got = true; locked = true; return p; }
         }
     }
     SetProcessWorkingSetSizeEx(GetCurrentProcess(), bytes + (256ull << 20), bytes + (512ull << 20),
                                QUOTA_LIMITS_HARDWS_MIN_ENABLE | QUOTA_LIMITS_HARDWS_MAX_DISABLE);
     void* p = VirtualAlloc(nullptr, bytes, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
-    if (p) VirtualLock(p, bytes);
+    if (p) locked = VirtualLock(p, bytes) != 0;
     return p;
 }
 void release(void* p, u64) { VirtualFree(p, 0, MEM_RELEASE); }
@@ -134,11 +145,12 @@ void pin(int cpu) {
 u64 avail_phys() { return (u64)sysconf(_SC_AVPHYS_PAGES) * (u64)sysconf(_SC_PAGESIZE); }
 u64 total_phys() { return (u64)sysconf(_SC_PHYS_PAGES) * (u64)sysconf(_SC_PAGESIZE); }
 void lower_priority() {}
-void* alloc(u64 bytes, bool, bool& got) {
-    got = false;
+void* alloc(u64 bytes, bool, bool& got, bool& locked) {
+    got = false; locked = false;
     void* p = mmap(nullptr, bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (p == MAP_FAILED) return nullptr;
     madvise(p, bytes, MADV_HUGEPAGE);
+    locked = mlock(p, bytes) == 0;
     return p;
 }
 void release(void* p, u64 b) { munmap(p, b); }
@@ -353,11 +365,15 @@ static void expand_style(const std::string& st, const Params& P, std::vector<std
     else if (st == "quarter") uni("quarter(00001111)", 0x0F0F, 0xF0F0);
     else if (st == "low") uni("lowfreq(8 ones/8 zeros)", 0x00FF, 0xFF00);
     else if (st == "pulse") {
-        for (int L = 0; L < 32; L++) s[L] = (u16)(1u << (L % 16)); out.push_back({"pulse(single 1 in zeros)", beats_from_lanes(s)});
-        for (int L = 0; L < 32; L++) s[L] = (u16)~(1u << (L % 16)); out.push_back({"pulse_inv(single 0 in ones)", beats_from_lanes(s)});
+        for (int L = 0; L < 32; L++) { s[L] = (u16)(1u << (L % 16)); }
+        out.push_back({"pulse(single 1 in zeros)", beats_from_lanes(s)});
+        for (int L = 0; L < 32; L++) { s[L] = (u16)~(1u << (L % 16)); }
+        out.push_back({"pulse_inv(single 0 in ones)", beats_from_lanes(s)});
     } else if (st == "skew") {
-        for (int L = 0; L < 32; L++) s[L] = rotl16(0x0F0F, L); out.push_back({"skew(quarter, phase=lane)", beats_from_lanes(s)});
-        for (int L = 0; L < 32; L++) s[L] = rotl16(0x00FF, L); out.push_back({"skew(low, phase=lane)", beats_from_lanes(s)});
+        for (int L = 0; L < 32; L++) { s[L] = rotl16(0x0F0F, L); }
+        out.push_back({"skew(quarter, phase=lane)", beats_from_lanes(s)});
+        for (int L = 0; L < 32; L++) { s[L] = rotl16(0x00FF, L); }
+        out.push_back({"skew(low, phase=lane)", beats_from_lanes(s)});
     } else if (st == "victim") {
         auto vl = P.nums("victims");
         std::vector<u64> victims = vl; if (victims.empty()) for (u64 v = 0; v < 32; v++) victims.push_back(v);
@@ -514,10 +530,21 @@ struct Run {
     void sync() { bar->arrive_and_wait(); }
     void set_label(const std::string& s) { std::lock_guard<std::mutex> l(mu); label = s; }
     void tick() { done.fetch_add(0x10000ull * 64, std::memory_order_relaxed); }
+    // Window `ctr` of the thread's chunk. ceil(lines / wl) windows rotate; the last one is shifted back so it ends exactly at the chunk end
+    // (it overlaps the previous window instead of leaving a never-tested tail).
     View view(int tid, u64 wl, u64 ctr) const {
         const Chunk& c = chunks[tid];
         if (!wl || wl >= c.lines) return {c.base, c.g, c.lines};
-        u64 nw = c.lines / wl, s = (ctr % nw) * wl; return {c.base + s * 64, c.g + s, wl};
+        u64 nw = (c.lines + wl - 1) / wl, s = (ctr % nw) * wl;
+        if (s + wl > c.lines) s = c.lines - wl;
+        return {c.base + s * 64, c.g + s, wl};
+    }
+    // A window of the same size that never overlaps view(tid, wl, ctr): where the disturb traffic goes. Needs >= 2 whole windows per chunk.
+    View dview(int tid, u64 wl, u64 ctr) const {
+        const Chunk& c = chunks[tid]; View v = view(tid, wl, ctr);
+        u64 sv = (u64)(v.base - c.base) / 64, sd = sv + wl;
+        if (sd + wl > c.lines) sd = sv >= wl ? sv - wl : sv + wl;
+        return {c.base + sd * 64, c.g + sd, wl};
     }
     u64 window_lines(const Params& P) const {
         u64 mb = P.num("window_mb", 0); if (!mb) return 0;
@@ -534,9 +561,10 @@ struct Run {
 // output sink: stdout in CLI mode, log pane in the GUI
 static std::function<void(const std::string&)> g_emit;
 static bool g_console = false;
+static bool g_tty = true;   // console front-end: stdout is a terminal (live progress line); false when piped / in CI (a progress line every 30 s instead)
 static void emit(const std::string& t) { if (g_emit) g_emit(t); else { fputs(t.c_str(), stdout); fflush(stdout); } }
 static void emitf(const char* fmt, ...) { char b[2048]; va_list a; va_start(a, fmt); vsnprintf(b, sizeof b, fmt, a); va_end(a); emit(b); }
-static void print_clear() { if (g_console) printf("\r%*s\r", 118, ""); }
+static void print_clear() { if (g_console && g_tty) printf("\r%*s\r", 118, ""); }
 
 void Run::report(int tid, const u8* addr, const Line& e, const Line& a, const char* phase, bool reread) {
     const u32* eb = (const u32*)&e; const u32* ab = (const u32*)&a;
@@ -545,10 +573,12 @@ void Run::report(int tid, const u8* addr, const Line& e, const Line& a, const ch
         u32 d = eb[b] ^ ab[b]; if (!d) continue;
         st.beat[b]++; beatmask |= 1u << b; lanemask |= d;
         for (int l = 0; l < 32; l++) if ((d >> l) & 1) st.lane[l]++;
-        int pc = pc32(d); bits += pc; perblk[b / 4] += pc;
+        bits += pc32(d); for (int g = 0; g < 4; g++) perblk[g] += pc32((d >> (8 * g)) & 0xFFu);
     }
     // On-die ECC (128 data bits + 8 check bits per codeword) corrects 1 bit invisibly, so what reaches us is
-    // mostly >=2 bits inside one 128-bit codeword (or a miscorrection). Bucket per 16-byte block.
+    // mostly >=2 bits inside one codeword (or a miscorrection). On x8 DRAMs one codeword is ONE device's 8 DQ lanes over all 16 beats,
+    // i.e. byte lane g of every 32-bit beat (perblk[g]). This ASSUMES x8 devices and an unswizzled lane order: the memory controller's
+    // scrambling and board lane swaps cannot be seen from user mode, so treat the grouping as a heuristic, not ground truth.
     for (int k = 0; k < 4; k++) if (perblk[k]) st.blk[perblk[k] == 1 ? 0 : perblk[k] == 2 ? 1 : perblk[k] <= 4 ? 2 : 3]++;
     u64 nl = st.lines.fetch_add(1) + 1; st.bits += bits; errTotal++;
     double tnow = plat::now();
@@ -568,7 +598,7 @@ void Run::report(int tid, const u8* addr, const Line& e, const Line& a, const ch
     if (logged >= cfg.maxLog) return;
     logged++;
     char buf[1400]; int o = 0;
-    o += snprintf(buf + o, sizeof buf - o, "ERROR t=%.1fs test=\"%s\" %s thr=%d addr=%p beats=0x%04X lanes=0x%08X bits=%llu 128b-blocks[1b/2b/3-4b/5+b]=%d/%d/%d/%d %s\n",
+    o += snprintf(buf + o, sizeof buf - o, "ERROR t=%.1fs test=\"%s\" %s thr=%d addr=%p beats=0x%04X lanes=0x%08X bits=%llu x8-codewords[1b/2b/3-4b/5+b]=%d/%d/%d/%d %s\n",
                   tnow - tStart, label.c_str(), phase, tid, (const void*)addr, beatmask, lanemask, (unsigned long long)bits,
                   (int)(perblk[0] == 1) + (perblk[1] == 1) + (perblk[2] == 1) + (perblk[3] == 1),
                   (int)(perblk[0] == 2) + (perblk[1] == 2) + (perblk[2] == 2) + (perblk[3] == 2),
@@ -584,7 +614,7 @@ void Run::report(int tid, const u8* addr, const Line& e, const Line& a, const ch
 template <class F> void Run::parallel(F fn) {
     std::barrier<> b(T); bar = &b; std::atomic<int> running{T}; std::vector<std::thread> th;
     for (int t = 0; t < T; t++) th.emplace_back([&, t] { plat::pin(t); fn(t); b.arrive_and_drop(); running--; });
-    double t0 = plat::now(), tl = t0; u64 dl = done.load();
+    double t0 = plat::now(), tl = t0, hb = t0; u64 dl = done.load();
     while (running.load() > 0) {
         std::this_thread::sleep_for(std::chrono::milliseconds(250));
         double t = plat::now();
@@ -597,7 +627,8 @@ template <class F> void Run::parallel(F fn) {
             std::string lab; { std::lock_guard<std::mutex> l(mu); lab = label; }
             char buf[220]; snprintf(buf, sizeof buf, "  [%5.0fs] %-50.50s %5.1f GB/s  cov %4.0f%%  errors: %llu", t - t0, lab.c_str(), rate,
                                     regionBytes ? 100.0 * vtotal.load() / regionBytes : 0.0, (unsigned long long)st.lines.load());
-            if (g_console) { printf("\r%-118.118s", buf); fflush(stdout); }
+            if (g_console && g_tty) { printf("\r%-118.118s", buf); fflush(stdout); }
+            else if (g_console && t - hb >= 30.0) { hb = t; printf("%s\n", buf); fflush(stdout); }
         }
     }
     for (auto& x : th) x.join();
@@ -618,7 +649,8 @@ static OrderSpec ospec(const Params& P, const char* key, const char* def) {
 }
 static std::vector<u64> stride_list(const Params& P, bool needed) {
     std::vector<u64> o; if (!needed) { o.push_back(1); return o; }
-    for (u64 b : P.nums("stride", "4K")) o.push_back(std::max<u64>(1, b / 64)); return o;
+    for (u64 b : P.nums("stride", "4K")) { o.push_back(std::max<u64>(1, b / 64)); }
+    return o;
 }
 
 // ------------------------------------------------------------------ disturb traffic (manufacturer-style "disturb between write and read")
@@ -675,7 +707,7 @@ static void algo_fill(Run& R, const Params& P) {
                 if (tid == 0 && ji == 0) { u8* c = w.base + 640 * 64 + 20; c[0] ^= 0x05; c[1] ^= 0x10; w.base[900 * 64 + 4] ^= 0x80; for (int k = 0; k < 40; k++) w.base[(4096 + k) * 64 + 8] ^= 1; _mm_clflush(c); _mm_mfence(); }
                 R.sync();
 #endif
-                if (j.dmode >= 0) { disturb_traffic(R, R.view(tid, wl, base + ji + 1), j.dmode, dpasses, 0xD157 + tid + ji + g_salt); _mm_sfence(); R.sync(); }
+                if (j.dmode >= 0) { disturb_traffic(R, R.dview(tid, wl, base + ji), j.dmode, dpasses, 0xD157 + tid + ji + g_salt); _mm_sfence(); R.sync(); }
                 if (j.dwell) { if (tid == 0) R.sleep_ms(j.dwell); R.sync(); }
                 for (u64 r = 0; r < reads && !R.stop; r++)
                     walk(R, ov, vo.rev, [&](u64 i) {
@@ -757,7 +789,7 @@ static void algo_march(Run& R, const Params& P) {
                     const MEl& e = els[ei];
                     if (e.delay) { R.sync(); if (tid == 0) R.sleep_ms(e.ms); R.sync(); continue; }
                     if (e.dist) {
-                        if (distOk) disturb_traffic(R, R.view(tid, wl, base + ji + 1), e.dmode, e.dpasses, 0xD157 + tid * 31 + ji * 7 + ei + g_salt);
+                        if (distOk) disturb_traffic(R, R.dview(tid, wl, base + ji), e.dmode, e.dpasses, 0xD157 + tid * 31 + ji * 7 + ei + g_salt);
                         _mm_sfence(); R.sync(); continue;
                     }
                     bool down = (e.dir == 'v' || e.dir == 'V') != j.os.rev;
@@ -976,7 +1008,8 @@ static void algo_probe(Run& R, const Params& P) {
         emitf("    stride        median   p10    p90   slow%%   (slow = likely same bank, different row)\n");
         double minSlow = 100, maxSlow = 0;
         for (size_t si = 0; si < strides.size(); si++) {
-            if (res[si].empty()) continue; auto& v = res[si]; std::sort(v.begin(), v.end());
+            if (res[si].empty()) { continue; }
+            auto& v = res[si]; std::sort(v.begin(), v.end());
             size_t slow = 0; for (double x : v) if (x > thr) slow++;
             double sp = 100.0 * slow / v.size(); minSlow = std::min(minSlow, sp); maxSlow = std::max(maxSlow, sp);
             emitf("    %-12llu %6.0f %6.0f %6.0f  %5.1f%%\n", (unsigned long long)strides[si], pct(v, 0.5), pct(v, 0.1), pct(v, 0.9), sp);
@@ -1140,6 +1173,7 @@ struct Settings {
     int suite = 0;                // 0 full, 1 quick (no long pauses / hammer)
     std::string logFile = "ddr5test.log";
     u64 coverageStop = 0; double minutes = 0; u64 loops = 0; std::string filter;
+    u64 testSeconds = 0;          // >0 caps the duration of the timed tests (page shuffle, cache coherency); 0 = as in suite.cfg
 };
 
 static void emit_skew(const char* prefix, const Stats& s, u64 regionBytes) {
@@ -1177,6 +1211,7 @@ static int run_suite(const Settings& s, Run& R) {
             if (s.suite == 1 && !t.p.flag("quick", false)) continue;
             if (!flt.empty() && lower(t.name).find(flt) == std::string::npos) continue;
             std::string algo = lower(t.p.str("algo", "fill")); if (!ALGOS.count(algo)) continue;
+            if (s.testSeconds && t.p.has("seconds")) t.p.m["seconds"] = std::to_string(std::min<u64>(t.p.num("seconds", s.testSeconds), s.testSeconds));
             if (s.cacheMode && (algo == "fill" || algo == "march" || algo == "rwstorm")) {
                 t.p.m["flush"] = s.cacheMode == 1 ? "1" : "0"; t.p.m["nt"] = s.cacheMode == 3 ? "1" : "0";
             }
@@ -1190,12 +1225,13 @@ static int run_suite(const Settings& s, Run& R) {
         if (s.megabytes) want = s.megabytes << 20; else want = avail / 100 * 90;
         if (want > avail / 100 * 97) { want = avail / 100 * 97; emitf("requested memory exceeds free memory; reduced to %llu MB to avoid paging\n", (unsigned long long)(want >> 20)); }
         u64 per = want / R.T / MB2 * MB2; if (!per) { emitf("not enough memory (need at least 2 MB per thread)\n"); return 2; }
-        u64 total = per * R.T; bool gotLP = false;
+        u64 total = per * R.T; bool gotLP = false, locked = false;
         emitf("%d threads, testing %.2f GiB of %.2f GiB free, %zu tests\n", R.T, total / 1073741824.0, avail / 1073741824.0, sel.size());
-        R.region = (u8*)plat::alloc(total, cfg.large, gotLP);
+        R.region = (u8*)plat::alloc(total, cfg.large, gotLP, locked);
         if (!R.region) { emitf("allocation of %llu MB failed\n", (unsigned long long)(total >> 20)); return 2; }
         R.regionBytes = total;
-        emitf("memory locked, large pages: %s\n", gotLP ? "yes (2MB contiguous physical runs)" : cfg.large ? "no (needs 'Lock pages in memory' right; using normal pages)" : "off");
+        emitf("memory %s, large pages: %s\n", locked ? "locked" : "NOT locked (the OS may page parts of it out; close other programs or lower Megabytes)",
+              gotLP ? "yes (2MB contiguous physical runs)" : cfg.large ? "no (needs 'Lock pages in memory' right; using normal pages)" : "off");
         R.chunks.clear(); for (int t = 0; t < R.T; t++) R.chunks.push_back({R.region + (u64)t * per, per / 64, (u64)t * (per / 64)});
         R.running = true;
         R.parallel([&](int tid) { std::memset(R.chunks[tid].base, 0, per); });
@@ -1206,7 +1242,7 @@ static int run_suite(const Settings& s, Run& R) {
         std::atomic<bool> fpuStop{false}; std::vector<std::thread> fpu;
         if (s.stressFpu) for (int i = 0; i < R.T; i++) fpu.emplace_back(fpu_stress, std::ref(fpuStop));
 
-        double t0 = plat::now(); R.tStart = t0; int failedTests = 0;
+        double t0 = plat::now(); R.tStart = t0; int failedTests = 0; std::vector<std::string> failedNames;
         for (u64 loop = 1; (!cfg.loops || loop <= cfg.loops) && !R.stop; loop++) {
             g_salt = (loop - 1) * 0x9E3779B97F4A7C15ull;  // loop 1 is reproducible; later loops use fresh seeds/permutations
             for (size_t ti = 0; ti < sel.size() && !R.stop; ti++) {
@@ -1217,13 +1253,13 @@ static int run_suite(const Settings& s, Run& R) {
                 u64 bad = R.st.lines.load();
                 emitf("    %s  %.1fs  %.1f GB/s avg   coverage this test %.1fx\n", bad ? "FAIL" : (R.stop ? "STOP" : "pass"), el, R.done.load() / 1e9 / std::max(el, 1e-9), (double)R.vbytes.load() / (double)total);
                 if (bad) {
-                    failedTests++;
+                    failedTests++; if (std::find(failedNames.begin(), failedNames.end(), t.name) == failedNames.end()) failedNames.push_back(t.name);
                     emitf("    %llu bad lines, %llu bits; first error %.1f s into this test (%.1f s into the run)\n", (unsigned long long)bad, (unsigned long long)R.st.bits.load(), R.firstErrTest, R.firstErrRun);
                     emit_skew("    ", R.st, total);
                     std::string l1 = "    DQ lane errors  : "; for (int l = 0; l < 32; l++) if (R.st.lane[l]) l1 += "[" + std::to_string(l) + "]=" + std::to_string(R.st.lane[l].load()) + " ";
                     std::string l2 = "    BL16 beat errors: "; for (int b = 0; b < 16; b++) if (R.st.beat[b]) l2 += "[" + std::to_string(b) + "]=" + std::to_string(R.st.beat[b].load()) + " ";
                     emit(l1 + "\n" + l2 + "\n");
-                    emitf("    128b ODECC-word bit-count 1/2/3-4/5+: %llu/%llu/%llu/%llu   re-read: transient=%llu stable=%llu unstable=%llu\n",
+                    emitf("    x8 on-die-ECC codeword (8 lanes x 16 beats, assumed layout) bit-count 1/2/3-4/5+: %llu/%llu/%llu/%llu   re-read: transient=%llu stable=%llu unstable=%llu\n",
                           (unsigned long long)R.st.blk[0].load(), (unsigned long long)R.st.blk[1].load(), (unsigned long long)R.st.blk[2].load(), (unsigned long long)R.st.blk[3].load(),
                           (unsigned long long)R.st.trans.load(), (unsigned long long)R.st.stable.load(), (unsigned long long)R.st.unstable.load());
                     R.total.lines += bad; R.total.bits += R.st.bits.load();
@@ -1236,6 +1272,7 @@ static int run_suite(const Settings& s, Run& R) {
         emitf("\nfinished in %.0fs: %s (%llu bad lines, %d failing test runs)%s%s\n", el, R.total.lines ? "ERRORS FOUND" : "no errors", (unsigned long long)R.total.lines.load(), failedTests,
               R.stopReason.empty() ? "" : "  - ", R.stopReason.c_str());
         emitf("total coverage: %.1fx of the %.2f GiB tested region verified\n", (double)R.vtotal.load() / (double)total, total / 1073741824.0);
+        if (!failedNames.empty()) { emitf("tests with errors:\n"); for (auto& n : failedNames) emitf("    %s\n", n.c_str()); }
         if (R.total.lines) { emitf("first error: %.1f s into the run\nwhole run:\n", R.firstErrRun); emit_skew("    ", R.total, total); }
         if (R.logf) { fclose(R.logf); R.logf = nullptr; }
         plat::release(R.region, total); R.region = nullptr;
