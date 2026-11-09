@@ -230,7 +230,7 @@ void build_ui() {
 
     y += 56;
     mk(L"STATIC", L"CPU cache: Default follows each test; Bypass reads straight from DRAM (clflush every access); Cached uses normal write-back traffic; Non-temporal uses streaming stores.\n\n"
-                  L"RNG: data generator for hash tests.\n\nTest set: Quick skips long pauses and row hammer.\n\nStress FPU adds an AVX load on every thread (more power draw).",
+                  L"RNG: data generator for hash tests.\n\nTest set: Quick runs a shorter subset.\n\nStress FPU adds an AVX load on every thread (more power draw).",
        SS_LEFT, X, y, W, 150, 0, 1);
 
     // spin buttons: ranges, defaults, acceleration
