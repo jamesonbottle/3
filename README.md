@@ -14,12 +14,17 @@ The window follows the familiar two-tab layout (Testing / Advanced) used by popu
 Advanced tab
 - **CPU cache**: Default (each test decides), Bypass (clflush every access so reads come from DRAM), Cached, Non-temporal (streaming stores).
 - **RNG**: generator used by the hash tests.
-- **Test set**: Full (35 tests) or Quick (skips long pauses and row hammer). *This is an addition to the reference layout.*
+- **Test set**: Full (38 tests) or Quick (skips long pauses and row hammer). *This is an addition to the reference layout.*
 - **Stress FPU**: AVX load on every thread - more power and heat, for testing marginal supply.
 
 ## What is tested
 
-35 tests (consolidated from an earlier 87 by turning near-duplicates into list sweeps) built around how DDR5 behaves: BL16 64-byte bursts over two 32-bit subchannels, bank groups (tCCD_L/S, tRRD, tFAW), row open/close (tRCD/tRP/tRAS/tRC), bus turnaround (tWTR/tRTW), refresh and retention (tREFI/tRFC/tREFW pauses), row-hammer-style activation patterns, DQ lane crosstalk and pattern-sensitivity styles, address-decode tests, pointer-chase latency stress, and read/write mixes. Read `suite.cfg` for the full list; each block has a name.
+38 tests (87 consolidated into 35 by turning near-duplicates into list sweeps, plus 3 modelled on Google's stressapptest) built around how DDR5 behaves: BL16 64-byte bursts over two 32-bit subchannels, bank groups (tCCD_L/S, tRRD, tFAW), row open/close (tRCD/tRP/tRAS/tRC), bus turnaround (tWTR/tRTW), refresh and retention (tREFI/tRFC/tREFW pauses), row-hammer-style activation patterns, DQ lane crosstalk and pattern-sensitivity styles, address-decode tests, pointer-chase latency stress, and read/write mixes. Read `suite.cfg` for the full list; each block has a name.
+
+Ideas taken from [stressapptest](https://github.com/stressapptest/stressapptest) (reimplemented from its public description, no code copied):
+- **Pattern table**: walking ones / inverse-alternating ones / zeros, 0/1, 5/A, 8b10b-style, "busy" patterns, each held for 1/2/4/8 words (32 to 256-bit bus-width repeat) and inverted too.
+- **Page shuffle**: all memory in 4 KB pages with random patterns; threads copy pages onto each other (verifying the source line by line), invert pages in place four times (up, down, down, up), refill and re-check them, mixing cache-hot and flushed accesses, then verify every page. Data keeps moving between cores and channels while staying predictable.
+- **Cache coherency**: threads share a few cache lines, each owning one byte; sums are checked after every round. This tests the cores' caches and fabric, not DRAM cells.
 
 ## Honest limits
 

@@ -20,6 +20,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
 #include <fstream>
 #include <functional>
 #include <map>
@@ -284,8 +285,42 @@ static inline u64 mix64(u64 x) {
     default: x = (x ^ (x >> 30)) * 0xBF58476D1CE4E5B9ull; x = (x ^ (x >> 27)) * 0x94D049BB133111EBull; return x ^ (x >> 31);
     }
 }
+// Data patterns in the style of Google's stressapptest table (the exact table is reimplemented from its public description,
+// not copied): walking ones / inverse-alternating ones / zeros, 0/1, 5/A, 8b10b-style, and a few "busy" patterns that toggle
+// many lanes per beat. Each 32-bit pattern word is held for 1/2/4/8 consecutive words ("bus width" 32/64/128/256 bit repeat).
+// weight[w] = how often stressapptest-style random page filling picks this pattern at width w (0 = not used at that width).
+struct SatPat { const char* name; std::array<u32, 64> w; int len; int weight[4]; };
+static const std::vector<SatPat>& sat_table() {
+    static const std::vector<SatPat> t = [] {
+        std::vector<SatPat> v; auto add = [&](const char* n, std::initializer_list<u32> l, int a, int b, int c, int d) {
+            SatPat p{}; p.name = n; int i = 0; for (u32 x : l) p.w[i++] = x; p.len = i; p.weight[0] = a; p.weight[1] = b; p.weight[2] = c; p.weight[3] = d; v.push_back(p);
+        };
+        SatPat w1{}, wi{}, w0{}; w1.name = "walking-ones"; wi.name = "walking-inv-ones"; w0.name = "walking-zeros"; w1.len = wi.len = w0.len = 64;
+        for (int i = 0; i < 64; i++) {
+            u32 x = i < 32 ? 1u << i : (i < 63 ? 1u << (62 - i) : 0u);    // up 1..0x80000000, then back down to 0
+            w1.w[i] = x; w0.w[i] = ~x; u32 u = 1u << (i / 2); wi.w[i] = (i & 1) ? ~u : u;
+        }
+        int a[4] = {1, 1, 2, 1}, b[4] = {2, 2, 5, 5};
+        memcpy(w1.weight, a, sizeof a); memcpy(w0.weight, a, sizeof a); memcpy(wi.weight, b, sizeof b);
+        v.push_back(w1); v.push_back(wi); v.push_back(w0);
+        add("zero/one", {0x00000000u, 0xFFFFFFFFu}, 5, 5, 15, 5);
+        add("zeros", {0x00000000u}, 2, 0, 0, 0);        add("ones", {0xFFFFFFFFu}, 2, 0, 0, 0);
+        add("5555", {0x55555555u}, 2, 0, 0, 0);          add("AAAA", {0xAAAAAAAAu}, 2, 0, 0, 0);
+        add("5/A", {0x55555555u, 0xAAAAAAAAu}, 1, 1, 1, 1);
+        add("5AA5", {0x5AA5A55Au, 0xA55A5AA5u, 0xA55A5AA5u, 0x5AA5A55Au}, 1, 1, 1, 1);
+        add("8b10b-long", {0x16161616u}, 2, 0, 0, 0);    add("8b10b-short", {0xB5B5B5B5u}, 2, 0, 0, 0);
+        add("8b10b-checker", {0xB5B5B5B5u, 0x4A4A4A4Au}, 1, 0, 0, 1);
+        add("5557", {0x55555557u, 0x55575555u}, 0, 2, 0, 0);
+        add("0002/FFFD", {0x00020002u, 0xFFFDFFFDu}, 0, 2, 0, 0);
+        return v;
+    }();
+    return t;
+}
+static inline u32 sat_word(const SatPat& p, u64 idx, int rep) { return p.w[(idx >> rep) % (u64)p.len]; }
+
 struct Gen {
-    int kind = 0;  // 0 pattern, 1 hash, 2 address-in-address
+    int kind = 0;  // 0 pattern, 1 hash, 2 address-in-address, 3 stressapptest-style pattern (sp, rep)
+    const SatPat* sp = nullptr; int rep = 0;
     Line pat{}, inv{}; u64 seed = 0; int altshift = -1; u64 modn = 0, modoff = 0;  // modulo-N: every Nth line (offset) is inverted
     void set_beats(const Beats& b) {
         for (int j = 0; j < 8; j++) { pat.w[j] = (u64)b[2 * j] | ((u64)b[2 * j + 1] << 32); inv.w[j] = ~pat.w[j]; }
@@ -296,6 +331,7 @@ struct Gen {
             if (modn) s ^= (g % modn) == modoff;
             o = s ? inv : pat;
         }
+        else if (kind == 3) { for (int j = 0; j < 8; j++) { u64 v = (u64)sat_word(*sp, g * 16 + 2 * j, rep) | ((u64)sat_word(*sp, g * 16 + 2 * j + 1, rep) << 32); o.w[j] = invert ? ~v : v; } }
         else if (kind == 1) { for (int j = 0; j < 8; j++) { u64 v = mix64(((g << 3) + j) ^ seed); o.w[j] = invert ? ~v : v; } }
         else { for (int j = 0; j < 8; j++) { u64 v = ((u64)(uintptr_t)addr + 8 * j) ^ seed; o.w[j] = invert ? ~v : v; } }
     }
@@ -351,6 +387,13 @@ static void expand_style(const std::string& st, const Params& P, std::vector<std
 static std::vector<Var> build_vars(const Params& P) {
     std::vector<Var> out; std::string data = lower(P.str("data", "pattern"));
     u64 seed = P.num("seed", 0);
+    if (data == "sat") {   // every stressapptest-style pattern at each requested bus-width repeat (combinations it never uses are skipped)
+        for (auto& sp : sat_table()) for (u64 wd : P.nums("sat_width", "32 64 128 256")) {
+            int rep = wd >= 256 ? 3 : wd >= 128 ? 2 : wd >= 64 ? 1 : 0; if (!sp.weight[rep]) continue;
+            Var v; v.g.kind = 3; v.g.sp = &sp; v.g.rep = rep; v.label = std::string("sat ") + sp.name + " x" + std::to_string(32u << rep); out.push_back(v);
+        }
+        return out;
+    }
     if (data == "hash" || data == "addr") {
         u64 ns = P.num("seeds", 1);
         for (u64 i = 0; i < ns; i++) {
@@ -485,7 +528,7 @@ struct Run {
         while (plat::now() < end && !stop.load()) std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
     template <class F> void parallel(F fn);
-    void report(int tid, const u8* addr, const Line& e, const Line& a, const char* phase);
+    void report(int tid, const u8* addr, const Line& e, const Line& a, const char* phase, bool reread = true);
 };
 
 // output sink: stdout in CLI mode, log pane in the GUI
@@ -495,7 +538,7 @@ static void emit(const std::string& t) { if (g_emit) g_emit(t); else { fputs(t.c
 static void emitf(const char* fmt, ...) { char b[2048]; va_list a; va_start(a, fmt); vsnprintf(b, sizeof b, fmt, a); va_end(a); emit(b); }
 static void print_clear() { if (g_console) printf("\r%*s\r", 118, ""); }
 
-void Run::report(int tid, const u8* addr, const Line& e, const Line& a, const char* phase) {
+void Run::report(int tid, const u8* addr, const Line& e, const Line& a, const char* phase, bool reread) {
     const u32* eb = (const u32*)&e; const u32* ab = (const u32*)&a;
     int perblk[4] = {0, 0, 0, 0}; u64 bits = 0; u32 lanemask = 0, beatmask = 0;
     for (int b = 0; b < 16; b++) {
@@ -511,8 +554,8 @@ void Run::report(int tid, const u8* addr, const Line& e, const Line& a, const ch
     double tnow = plat::now();
     { std::lock_guard<std::mutex> l2(mu); if (firstErrTest < 0) firstErrTest = tnow - tTestStart; if (firstErrRun < 0) firstErrRun = tnow - tStart; }
     { u64 off = (u64)(addr - region); for (int b = 6; b < 48; b++) if ((off >> b) & 1) st.abit[b]++; }
-    const char* cls = "n/a";
-    if (nl < 20000) {  // re-read from DRAM: separates read-path/signalling errors from stored errors
+    const char* cls = reread ? "n/a" : "(logical check, not a memory line)";
+    if (reread && nl < 20000) {  // re-read from DRAM: separates read-path/signalling errors from stored errors
         _mm_clflush(addr); _mm_mfence();
         Line r; IO<32, 0, 0>::load(addr, r);
         bool eq_e = !memcmp(&r, &e, 64), eq_a = !memcmp(&r, &a, 64);
@@ -948,10 +991,139 @@ static void algo_probe(Run& R, const Params& P) {
     });
 }
 
+// ------------------------------------------------------------------ algo: pagemix (stressapptest-style page shuffle)
+// All memory is split into 4 KB pages and every page gets a random pattern from the stressapptest-style table. Threads then pick
+// random page pairs and (a) copy source -> destination while verifying the source line by line, (b) invert a page in place
+// 4 times (up, down, down, up - net identity, with flushes), (c) refill a page with a new pattern, or (d) re-check a page. The
+// destination takes the source's pattern, so data keeps moving between cores, banks and channels while every line stays
+// predictable. Hot (cache-resident) and flushed (DRAM round-trip) variants are mixed. Finally every page is verified.
+struct PagePat { u16 pat; u8 rep, inv; };
+template <int FL> static void pm_fill(u8* p, const Gen& g, bool inv) {
+    using io = IO<32, 0, FL>; for (int l = 0; l < 64; l++) { Line e; g.make(l, p + l * 64, inv, e); io::store(p + l * 64, e); }
+}
+template <int FL> static void pm_check(Run& R, int tid, u8* p, const Gen& g, bool inv, const char* ph) {
+    using io = IO<32, 0, FL>;
+    for (int l = 0; l < 64; l++) {
+        Line e, a; g.make(l, p + l * 64, inv, e); R.vtick();
+        if (!io::verify(p + l * 64, e, a)) { R.report(tid, p + l * 64, e, a, ph); io::store(p + l * 64, e); }
+    }
+}
+template <int FL> static void pm_copy(Run& R, int tid, u8* s, u8* d, const Gen& g, bool inv) {
+    using io = IO<32, 0, FL>;
+    for (int l = 0; l < 64; l++) {
+        Line e, a; g.make(l, s + l * 64, inv, e); R.vtick();
+        if (!io::verify(s + l * 64, e, a)) { R.report(tid, s + l * 64, e, a, "pagemix-src"); io::store(s + l * 64, e); }
+        io::store(d + l * 64, e);   // what was read equals e when the check passes; after a failure the destination gets good data
+    }
+}
+template <int FL> static void pm_invert(u8* p) {
+    static const int dir[4] = {0, 1, 1, 0};   // up, down, down, up
+    const __m256i ones = _mm256_set1_epi32(-1);
+    for (int pass = 0; pass < 4; pass++) for (int k = 0; k < 64; k++) {
+        u8* a = p + (dir[pass] ? 63 - k : k) * 64; CBAR();
+        __m256i x = _mm256_xor_si256(_mm256_load_si256((const __m256i*)a), ones), y = _mm256_xor_si256(_mm256_load_si256((const __m256i*)a + 1), ones);
+        _mm256_store_si256((__m256i*)a, x); _mm256_store_si256((__m256i*)a + 1, y);
+        if constexpr (FL) _mm_clflush(a);
+        CBAR();
+    }
+}
+static void algo_pagemix(Run& R, const Params& P) {
+    double secs = (double)P.num("seconds", 30); const auto& tab = sat_table();
+    u64 np = R.regionBytes / 4096; if (np < (u64)R.T * 8) { emitf("    pagemix: region too small, skipped\n"); return; }
+    std::unique_ptr<std::atomic<u8>[]> busy(new std::atomic<u8>[np]); for (u64 i = 0; i < np; i++) busy[i].store(0, std::memory_order_relaxed);
+    std::vector<PagePat> pp(np);
+    u64 wsum = 0; for (auto& t : tab) for (int w = 0; w < 4; w++) wsum += t.weight[w];
+    auto pick = [&](u64 r) { PagePat q{}; u64 x = r % (wsum * 2); q.inv = (u8)(x & 1); x >>= 1;
+        for (size_t i = 0; i < tab.size(); i++) for (int w = 0; w < 4; w++) { if (x < (u64)tab[i].weight[w]) { q.pat = (u16)i; q.rep = (u8)w; return q; } x -= tab[i].weight[w]; }
+        return q; };
+    auto gen = [&](const PagePat& q) { Gen g; g.kind = 3; g.sp = &tab[q.pat]; g.rep = q.rep; return g; };
+    R.parallel([&](int tid) {
+        u64 rng = splitmix(0x5A7 + tid * 7919 + g_salt); auto nx = [&] { rng = splitmix(rng); return rng; };
+        if (tid == 0) R.set_label("page shuffle: fill");
+        for (u64 pg = tid; pg < np && !R.stop; pg += R.T) {
+            pp[pg] = pick(nx()); u8* a = R.region + pg * 4096; Gen g = gen(pp[pg]); pm_fill<1>(a, g, pp[pg].inv);
+            if (((pg / R.T + 1) & 0x3FF) == 0) R.tick();
+        }
+        _mm_sfence(); R.sync();
+        if (tid == 0) R.set_label("page shuffle: copy / invert / refill / check");
+        double end = plat::now() + secs; u64 n = 0;
+        while (!R.stop) {
+            if ((++n & 63) == 0 && plat::now() >= end) break;
+            u64 r = nx(); u64 s = (r >> 8) % np, d = nx() % np; int op = (int)(r % 10); bool fl = (r >> 5) & 1;
+            if (op <= 5 && d == s) continue;
+            if (busy[s].exchange(1, std::memory_order_acquire)) continue;
+            bool two = op <= 5;
+            if (two && busy[d].exchange(1, std::memory_order_acquire)) { busy[s].store(0, std::memory_order_release); continue; }
+            u8* sa = R.region + s * 4096; u8* da = R.region + d * 4096; PagePat sq = pp[s]; Gen sg = gen(sq);
+            if (op <= 5) { if (fl) pm_copy<1>(R, tid, sa, da, sg, sq.inv); else pm_copy<0>(R, tid, sa, da, sg, sq.inv); pp[d] = sq; R.done.fetch_add(8192, std::memory_order_relaxed); }
+            else if (op == 6) { PagePat nq = pick(nx()); Gen ng = gen(nq); if (fl) pm_fill<1>(sa, ng, nq.inv); else pm_fill<0>(sa, ng, nq.inv); pp[s] = nq; R.done.fetch_add(4096, std::memory_order_relaxed); }
+            else if (op <= 8) { if (fl) pm_invert<1>(sa); else pm_invert<0>(sa); R.done.fetch_add(4096 * 4, std::memory_order_relaxed); }
+            else { if (fl) pm_check<1>(R, tid, sa, sg, sq.inv, "pagemix-check"); else pm_check<0>(R, tid, sa, sg, sq.inv, "pagemix-check"); R.done.fetch_add(4096, std::memory_order_relaxed); }
+            if (two) busy[d].store(0, std::memory_order_release);
+            busy[s].store(0, std::memory_order_release);
+        }
+        _mm_sfence(); R.sync();
+#ifdef DDR5TEST_INJECT  // self-test only
+        if (tid == 0) { R.region[3 * 4096 + 100] ^= 0x04; _mm_clflush(R.region + 3 * 4096 + 64); _mm_mfence(); }
+        R.sync();
+#endif
+        if (tid == 0) R.set_label("page shuffle: final verify of all pages");
+        for (u64 pg = tid; pg < np; pg += R.T) {
+            Gen g = gen(pp[pg]); pm_check<1>(R, tid, R.region + pg * 4096, g, pp[pg].inv, "pagemix-final");
+            if (((pg / R.T + 1) & 0x3FF) == 0) R.tick();
+        }
+        R.sync();
+    });
+}
+
+// ------------------------------------------------------------------ algo: coherency (stressapptest-style cache-coherency check)
+// A few cache lines are shared by all threads. Every thread owns one byte in each line and increments it at random lines (false
+// sharing: the line ping-pongs between cores while each core only touches its own byte). After a round every thread sums its bytes
+// over all lines and compares the low 8 bits with the number of increments it made. A lost or stale write = coherency fault. This
+// exercises the cores' caches and the fabric between them (CCX/CCD, ring), not DRAM cells.
+static void algo_coherency(Run& R, const Params& P) {
+    auto lines = P.nums("lines", "2 8 64"); u64 inc = std::max<u64>(1, P.num("inc", 1000)); double secs = (double)P.num("seconds", 8);
+    int nt = std::min(R.T, 64); std::atomic<bool> fin{false};
+    R.parallel([&](int tid) {
+        for (u64 L : lines) {
+            L = std::min<u64>(std::max<u64>(L, 1), 64); u8* mem = R.region;
+            if (tid == 0) { R.set_label("cache coherency, " + std::to_string(L) + " shared lines, " + std::to_string(nt) + " threads"); std::memset(mem, 0, L * 64); fin = false; }
+            double end = plat::now() + secs; u32 x = (u32)(splitmix(tid + 1 + g_salt + L * 977) | 1); R.sync();
+            for (;;) {
+                if (tid < nt) {
+                    for (u64 i = 0; i < inc; i++) {
+                        x = (x >> 1) ^ ((0u - (x & 1)) & 0xD0000001u); u64 line = x % L;
+                        u64 off = (line & (u64)tid & 1) ? (u64)(nt & ~1) - tid : (u64)tid;   // owner byte position differs between lines
+                        volatile u8* c = mem + line * 64 + off; *c = (u8)(*c + 1);
+                    }
+                }
+#ifdef DDR5TEST_INJECT  // self-test only: one lost/extra increment
+                if (tid == 0) { static bool once = false; if (!once) { once = true; mem[0]++; } }
+#endif
+                R.sync();
+                if (tid < nt) {
+                    u64 sum = 0;
+                    for (u64 line = 0; line < L; line++) {
+                        u64 off = (line & (u64)tid & 1) ? (u64)(nt & ~1) - tid : (u64)tid; volatile u8* c = mem + line * 64 + off; sum += *c; *c = 0;
+                    }
+                    if ((sum & 0xFF) != (inc & 0xFF)) { Line e{}, a{}; e.w[0] = inc & 0xFF; a.w[0] = sum & 0xFF; R.report(tid, mem + tid, e, a, "coherency", false); }
+                    R.done.fetch_add(inc * 8, std::memory_order_relaxed);
+                }
+                R.sync();
+                if (tid == 0) fin = R.stop.load() || plat::now() >= end;
+                R.sync();
+                if (fin.load()) break;
+            }
+            R.sync();
+        }
+    });
+}
+
 // ====================================================================== suite + run API (shared by the GUI and the CLI front-ends)
 using AlgoFn = void (*)(Run&, const Params&);
 static const std::map<std::string, AlgoFn> ALGOS = {{"fill", algo_fill}, {"march", algo_march}, {"hammer", algo_hammer}, {"copy", algo_copy},
-                                                    {"chase", algo_chase}, {"rwstorm", algo_rwstorm}, {"probe", algo_probe}};
+                                                    {"chase", algo_chase}, {"rwstorm", algo_rwstorm}, {"probe", algo_probe},
+                                                    {"pagemix", algo_pagemix}, {"coherency", algo_coherency}};
 
 #include "suite_data.h"   // generated from suite.cfg by tools/gen_suite.py: the whole test list is compiled in
 
