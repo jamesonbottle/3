@@ -4,10 +4,10 @@
 
 namespace ddr5 {
 
-OrderSpec ospec(const Params& P, const char* key, const char* def) {
+OrderSpec ospec(const Params& P, const char* key, const char* def, const Logger& log) {
     OrderSpec s;
     if (!Order::parse(P.str(key, def), s.k, s.rev)) {
-        emitf("bad %s\n", key);
+        log.emitf("bad %s\n", key);
     }
     return s;
 }
@@ -55,7 +55,7 @@ int parse_dmode(const std::string& s) {
 bool disturb_possible(Run& R, u64 wl, const char* what) {
     if (wl && R.chunks[0].lines / wl >= 2)
         return true;
-    emitf("%s: disturb needs window_mb small enough for >=2 windows per thread chunk; disturb disabled\n", what);
+    R.log.emitf("%s: disturb needs window_mb small enough for >=2 windows per thread chunk; disturb disabled\n", what);
     return false;
 }
 

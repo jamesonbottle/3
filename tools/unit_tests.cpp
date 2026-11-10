@@ -18,6 +18,7 @@
 using namespace ddr5;
 
 static int g_fail = 0;
+static Logger test_log; // sink set in main(): parser diagnostics are printed, not written to a real log
 #define CHECK(cond, ...)                                                                                               \
     do {                                                                                                               \
         if (!(cond)) {                                                                                                 \
@@ -70,7 +71,7 @@ static void test_windows() {
         for (u64 wl : {4096ull, 8192ull, 65536ull, 524288ull, 3000000ull}) {
             if (wl >= lines)
                 continue;
-            Run R;
+            Run R(test_log);
             R.T = 1;
             R.chunks.push_back({fake, lines, 0});
             u64 nw = (lines + wl - 1) / wl;
@@ -181,7 +182,7 @@ static void test_seed() {
     auto sig = [&](u64 seed, u64 loop) {
         g_salt = salt_for(seed, loop);
         Sig s;
-        for (auto& v : build_vars(p))
+        for (auto& v : build_vars(p, test_log))
             s.hash.push_back(v.g.seed);
         Order o;
         o.init(Order::RANDOM, 5000, 1, 1);
@@ -257,7 +258,7 @@ static void test_suite_parses() {
     Cfg cfg;
     std::vector<TestDef> tests;
     std::istringstream is(suite_text());
-    parse_cfg_stream(is, "<built-in>", cfg, tests);
+    parse_cfg_stream(is, "<built-in>", cfg, tests, test_log);
     CHECK(tests.size() == 28, "expected 28 tests, got %zu", tests.size());
     size_t quick = 0;
     for (auto& t : tests)
@@ -268,16 +269,16 @@ static void test_suite_parses() {
         CHECK(ALGOS.count(algo) == 1, "test '%s': unknown algo '%s'", t.name.c_str(), algo.c_str());
         if (algo == "fill" || algo == "march" || algo == "rwstorm" || algo == "evolve" || algo == "copy" ||
             algo == "chase")
-            CHECK(!build_vars(t.p).empty(), "test '%s': no data variants (typo in data/style/pattern?)",
+            CHECK(!build_vars(t.p, test_log).empty(), "test '%s': no data variants (typo in data/style/pattern?)",
                   t.name.c_str());
         if (algo == "march")
-            CHECK(!parse_march_variants(t.p.str("march")).empty(), "test '%s': march parses to nothing",
+            CHECK(!parse_march_variants(t.p.str("march"), test_log).empty(), "test '%s': march parses to nothing",
                   t.name.c_str());
     }
 }
 
 int main() {
-    g_emit = [](const std::string& s) {
+    test_log.sink = [](const std::string& s) {
         printf("  (engine) %s", s.c_str());
     }; // keep parser diagnostics visible, and keep them off the real log
     test_orders();

@@ -15,7 +15,7 @@ namespace ddr5 {
 
 // ------------------------------------------------------------------ algo: copy (real-world bulk copy engines)
 void algo_copy(Run& R, const Params& P) {
-    auto vars = build_vars(P);
+    auto vars = build_vars(P, R.log);
     auto methods = P.words("method", "memcpy movsb ntcopy");
     u64 blk = std::max<u64>(64, P.num("block", 64 * 1024));
     u64 wl = R.window_lines(P);

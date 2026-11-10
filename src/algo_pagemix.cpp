@@ -85,7 +85,7 @@ void algo_pagemix(Run& R, const Params& P) {
     const auto& tab = sat_table();
     u64 np = R.regionBytes / 4096;
     if (np < (u64)R.T * 8) {
-        emitf("    pagemix: region too small, skipped\n");
+        R.log.emitf("    pagemix: region too small, skipped\n");
         return;
     }
     std::unique_ptr<std::atomic<u8>[]> busy(new std::atomic<u8>[np]);

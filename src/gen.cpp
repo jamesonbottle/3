@@ -72,7 +72,8 @@ static u16 rotl16(u16 v, int r) {
 }
 
 // DQ-lane stress styles. Lane = bit position inside the 32-bit beat; beat = position in the BL16 burst.
-static void expand_style(const std::string& st, const Params& P, std::vector<std::pair<std::string, Beats>>& out) {
+static void expand_style(const std::string& st, const Params& P, std::vector<std::pair<std::string, Beats>>& out,
+                         const Logger& log) {
     u16 s[32];
     auto uni = [&](const std::string& n, u16 e, u16 o) {
         for (int L = 0; L < 32; L++)
@@ -153,10 +154,10 @@ static void expand_style(const std::string& st, const Params& P, std::vector<std
             out.push_back({"prbs7 variant " + std::to_string(k), beats_from_lanes(s)});
         }
     } else
-        emitf("unknown style '%s'\n", st.c_str());
+        log.emitf("unknown style '%s'\n", st.c_str());
 }
 
-std::vector<Var> build_vars(const Params& P) {
+std::vector<Var> build_vars(const Params& P, const Logger& log) {
     std::vector<Var> out;
     std::string data = lower(P.str("data", "pattern"));
     u64 seed = P.num("seed", 0);
@@ -190,7 +191,7 @@ std::vector<Var> build_vars(const Params& P) {
     if (P.has("style")) {
         std::vector<std::pair<std::string, Beats>> sv;
         for (auto& st : P.words("style"))
-            expand_style(lower(st), P, sv);
+            expand_style(lower(st), P, sv, log);
         for (auto& [n, b] : sv) {
             Var v;
             v.g.set_beats(b);

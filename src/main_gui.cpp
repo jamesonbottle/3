@@ -70,6 +70,7 @@ struct App {
          hBeep = nullptr, hStopErr = nullptr, hDur = nullptr, hCov = nullptr, hErr = nullptr, hTest = nullptr,
          hStart = nullptr, hCache = nullptr, hRng = nullptr, hSet = nullptr, hFpu = nullptr;
     std::vector<HWND> lockWhileRunning;
+    Logger logger; // declared before `run`, so it outlives it
     std::unique_ptr<Run> run;
     std::thread worker;
     std::atomic<bool> busy{false};
@@ -254,7 +255,7 @@ void start_run() {
                     s.threads, s.cacheMode, s.rngMode, s.suite, (int)s.stressFpu, (int)s.stopOnError);
         }
     }
-    g_emit = [](const std::string& t) {
+    A.logger.sink = [](const std::string& t) {
         std::lock_guard<std::mutex> l(A.logMu);
         if (A.log) {
             fputs(t.c_str(), A.log);
@@ -267,7 +268,7 @@ void start_run() {
             A.lastLine = t.substr(b, e - b + 1);
         }
     };
-    A.run = std::make_unique<Run>();
+    A.run = std::make_unique<Run>(A.logger);
     A.lastErr = 0;
     A.stopRequested = false;
     A.endT = 0;

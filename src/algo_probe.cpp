@@ -84,11 +84,12 @@ void algo_probe(Run& R, const Params& P) {
             return v[std::min(v.size() - 1, (size_t)(p * v.size()))];
         };
         double lo = all[all.size() / 10], hi = pct(all, 0.97), thr = (lo + hi) / 2;
-        print_clear();
-        emitf("    TSC %.3f GHz, overhead %.0f cycles removed. fast cluster ~%.0f ns, slow cluster ~%.0f ns, threshold "
-              "%.0f ns\n",
-              ghz, ovh, lo, hi, thr);
-        emitf("    stride        median   p10    p90   slow%%   (slow = likely same bank, different row)\n");
+        R.log.print_clear();
+        R.log.emitf(
+            "    TSC %.3f GHz, overhead %.0f cycles removed. fast cluster ~%.0f ns, slow cluster ~%.0f ns, threshold "
+            "%.0f ns\n",
+            ghz, ovh, lo, hi, thr);
+        R.log.emitf("    stride        median   p10    p90   slow%%   (slow = likely same bank, different row)\n");
         double minSlow = 100, maxSlow = 0;
         for (size_t si = 0; si < strides.size(); si++) {
             if (res[si].empty()) {
@@ -103,21 +104,24 @@ void algo_probe(Run& R, const Params& P) {
             double sp = 100.0 * slow / v.size();
             minSlow = std::min(minSlow, sp);
             maxSlow = std::max(maxSlow, sp);
-            emitf("    %-12llu %6.0f %6.0f %6.0f  %5.1f%%\n", (unsigned long long)strides[si], pct(v, 0.5), pct(v, 0.1),
-                  pct(v, 0.9), sp);
+            R.log.emitf("    %-12llu %6.0f %6.0f %6.0f  %5.1f%%\n", (unsigned long long)strides[si], pct(v, 0.5),
+                        pct(v, 0.1), pct(v, 0.9), sp);
         }
         if (maxSlow - minSlow >= 15.0) {
-            emitf("    slow - fast = %.0f ns  ~ tRP + tRCD (core-visible, noisy; compare with BIOS/ZenTimings/HWiNFO "
-                  "values)\n",
-                  hi - lo);
-            emitf("    Strides with a high slow%% hit the same bank in another row; the bits that flip between them "
-                  "feed the bank/row hash.\n");
+            R.log.emitf(
+                "    slow - fast = %.0f ns  ~ tRP + tRCD (core-visible, noisy; compare with BIOS/ZenTimings/HWiNFO "
+                "values)\n",
+                hi - lo);
+            R.log.emitf(
+                "    Strides with a high slow%% hit the same bank in another row; the bits that flip between them "
+                "feed the bank/row hash.\n");
         } else {
-            emitf("    No stride separates into a distinct fast/slow group (slow%% spread %.1f..%.1f): bank structure "
-                  "NOT resolvable here,\n"
-                  "    so no tRP+tRCD estimate is given. Typical causes: virtual machine, small-page TLB noise (use "
-                  "large pages), SMT/background load.\n",
-                  minSlow, maxSlow);
+            R.log.emitf(
+                "    No stride separates into a distinct fast/slow group (slow%% spread %.1f..%.1f): bank structure "
+                "NOT resolvable here,\n"
+                "    so no tRP+tRCD estimate is given. Typical causes: virtual machine, small-page TLB noise (use "
+                "large pages), SMT/background load.\n",
+                minSlow, maxSlow);
         }
     });
 }

@@ -44,7 +44,7 @@ Windows cannot be built in this environment. Windows-only files can be compile-c
 | M2 | Namespace `ddr5` (point 2) | done |
 | M3 | Generated `suite_data.h` cannot drift (point 8) | done |
 | M4 | Fault-injection hooks out of the algorithms (point 6) | done |
-| M5 | Remove global mutable state (point 1), sub-steps 5a-5c | todo |
+| M5 | Remove global mutable state (point 1), sub-steps 5a-5c | partial (5a done) |
 | M6 | Split up `Run` (point 3) | todo |
 | M7 | Typed, validated test parameters (point 4), sub-steps 7a-7j | todo |
 | M8 | Test runner: CTest (+ optional framework) (point 7) | todo |
@@ -101,7 +101,7 @@ Done when: `grep -rn DDR5TEST_INJECT src/` finds only `inject.h`, `inject.cpp` a
 
 Globals: `g_salt`, `g_rng` (seed), `g_emit`, `g_console`, `g_tty` (log). Do the three sub-steps as three separate commits.
 
-- [ ] **5a Output sink.** Replace `g_emit/g_console/g_tty` + free `emit/emitf/print_clear` with a `Logger` object (sink function, console flag, tty flag). The front-ends create it; `Run` holds a reference; `parse_cfg_stream` and `build_vars` take a `Logger&` (or a diagnostics callback). Same output bytes.
+- [x] **5a Output sink.** Replace `g_emit/g_console/g_tty` + free `emit/emitf/print_clear` with a `Logger` object (sink function, console flag, tty flag). The front-ends create it; `Run` holds a reference; `parse_cfg_stream` and `build_vars` take a `Logger&` (or a diagnostics callback). Same output bytes.
 - [ ] **5b Salt.** `g_salt` becomes `Run::salt` (set per loop in `run_suite`); `Order::init` and `build_vars` receive it as an argument instead of reading a global. Update the unit tests that set `g_salt`.
 - [ ] **5c RNG choice.** `g_rng` becomes a field of `Gen` (and a parameter of `evo_make`), copied from `Settings` when generators are built. `mix64(x)` keeps its hot-path switch but reads the field, not a global. Check `Gen::make` codegen did not get slower (run a 30 s `Pointer chase`/`Solid and checker` test before/after; GB/s within noise).
 
@@ -139,6 +139,7 @@ Done when: `ctest` runs both and passes; gate passes.
 ## Parking lot (found while working; not part of any step)
 
 - clang-tidy (tools/tidy.sh) at M1: 4 minor findings, none from `bugprone-*`: `Order::K` could be `uint8_t` (order.h), `lower(std::string s)` passes by value (params.cpp, fine: it modifies a copy), `emplace_back` in a loop without `reserve` (run.h `parallel`), string concatenation temporaries (suite.cpp ~201).
+- The M5 done-when grep (`^extern`) also matches `extern const std::map<...> ALGOS` in `algo.h`, which is const, not mutable state: at the end of M5 either turn it into an accessor function (`algos()`; `unit_tests.cpp` and `suite.cpp` use it) or drop `^extern` from that grep and say so in the Log.
 - `Cfg` has fields that nothing reads (`memPercent`, `memMB`, `marginMB`, `cacheMB`): delete in a separate commit after M5.
 - `main_gui.cpp` calls `GlobalMemoryStatusEx` directly in three places; `plat::avail_phys/total_phys` could be used.
 - `algo_hammer` and `algo_probe` have no built-in test using them (kept on purpose, see `suite.cfg`).
@@ -151,3 +152,4 @@ Done when: `ctest` runs both and passes; gate passes.
 - 2026-11-10 M2 done. Every project symbol in libddr5engine(.inject).a is in `ddr5::` (nm check, std/compiler symbols filtered); `plat` is now `ddr5::plat`; main_cli/main_gui/unit_tests use `using namespace ddr5;`. Macros (`CBAR`) stay global. Windows files compile for x86_64-windows-gnu. Gate green. Next: M3.
 - 2026-11-10 M3 done. `tools/gen_suite.py --check` (exit 1 on drift, default write unchanged and byte-identical) runs as the first check of selftest section 1, which needs `python3`. Gate green with 54 PASS lines (53 + the new check; the new minimum is 54), 0 FAIL, 0 build warnings. Verified: appending a line to `suite.cfg` without regenerating makes `tools/selftest.sh` exit 1 (FAIL on the new line). Next: M4.
 - 2026-11-10 M4 done. Five hooks (`after_fill`, `evolve_last_pass`, `pagemix_fill_stop`, `pagemix_flip`, `coherency_extra`) in `src/inject.h`/`inject.cpp`; the `R.sync()` that sat inside each `#ifdef` moved into its hook, so a normal build has no extra barrier. Evolve passes `&io::store` as a function pointer (injection build only). `inject.cpp` is only in `ddr5engine_inject` and `#error`s without `DDR5TEST_INJECT`. All 19 normal-build objects (`-O2 -mavx2 -std=c++20`) are byte-identical to before (sha256), no `inject` symbols in `libddr5engine.a`; `grep -rn DDR5TEST_INJECT src/` finds only `inject.h`/`inject.cpp`. Gate green: 54 PASS, 0 FAIL, injection counts unchanged (42 lines / 44 bits, 2 evolve lines, pagemix, coherency), `tools/format.sh --check` clean. Windows files not rebuilt (hooks are `((void)0)` there). Next: M5.
+- 2026-11-10 M5a done. `struct Logger { sink, console, tty; emit(), emitf(), print_clear() }` in `log.h`; the free functions and `g_emit/g_console/g_tty` are gone. `Run` holds `const Logger& log` (constructor `Run(const Logger&)`, so `unit_tests.cpp` now does `Run R(test_log)`); `build_vars`, `ospec`, `parse_march_variants`, `parse_cfg_stream` take a `const Logger&` as their LAST argument. CLI owns `static Logger log` (console/tty set after the `--list` branch, as before); GUI owns `A.logger` (declared before `A.run`). Same output bytes. Gate green: 54 PASS, 0 FAIL, 0 warnings, `format.sh --check` clean; Windows files (`platform_win`, `main_gui`, `main_cli`, `suite`, `run`) compile for x86_64-windows-gnu. Next: 5b (`g_salt` -> `Run::salt`; `Order::init` and `build_vars` take it as an argument; update the unit tests that set `g_salt`).

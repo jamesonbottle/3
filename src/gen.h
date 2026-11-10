@@ -3,6 +3,7 @@
 #include <array>
 #include <string>
 #include <vector>
+#include "log.h"
 #include "params.h"
 #include "seed.h"
 #include "types.h"
@@ -72,6 +73,6 @@ struct Var {
     Gen g;
 };
 
-std::vector<Var> build_vars(const Params& P);
+std::vector<Var> build_vars(const Params& P, const Logger& log);
 
 } // namespace ddr5

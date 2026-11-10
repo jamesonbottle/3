@@ -50,6 +50,8 @@ struct Stats {
 };
 inline thread_local u64 t_vcount = 0; // lines this thread has verified since its last flush into Run::vbytes / vtotal
 struct Run {
+    const Logger& log; // where output goes; owned by the front-end, must outlive the Run
+    explicit Run(const Logger& l) : log(l) {}
     Cfg cfg;
     int T = 1;
     std::vector<Chunk> chunks;
@@ -174,10 +176,10 @@ void Run::parallel(F fn) {
             snprintf(buf, sizeof buf, "  [%5.0fs] %-50.50s %5.1f GB/s  cov %4.0f%%  errors: %llu", t - t0, lab.c_str(),
                      rate, regionBytes ? 100.0 * vtotal.load() / regionBytes : 0.0,
                      (unsigned long long)st.lines.load());
-            if (g_console && g_tty) {
+            if (log.console && log.tty) {
                 printf("\r%-118.118s", buf);
                 fflush(stdout);
-            } else if (g_console && t - hb >= 30.0) {
+            } else if (log.console && t - hb >= 30.0) {
                 hb = t;
                 printf("%s\n", buf);
                 fflush(stdout);
@@ -187,7 +189,7 @@ void Run::parallel(F fn) {
     for (auto& x : th)
         x.join();
     bar = nullptr;
-    print_clear();
+    log.print_clear();
 }
 
 // walk q = 0..n-1 through an order; f(lineIndex)

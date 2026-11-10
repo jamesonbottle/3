@@ -27,7 +27,7 @@ std::string suite_text() {
     return t;
 }
 
-static void emit_skew(const char* prefix, const Stats& s, u64 regionBytes) {
+static void emit_skew(const char* prefix, const Stats& s, u64 regionBytes, const Logger& log) {
     u64 n = s.lines.load();
     if (n < 16)
         return;
@@ -41,11 +41,12 @@ static void emit_skew(const char* prefix, const Stats& s, u64 regionBytes) {
         }
     }
     if (out.empty())
-        emitf("%saddress bits: errors are spread evenly (no single address bit explains them)\n", prefix);
+        log.emitf("%saddress bits: errors are spread evenly (no single address bit explains them)\n", prefix);
     else
-        emitf("%saddress-bit skew (>=85%% of errors share a value):%s\n%s-> errors cluster on one side of these bits: "
-              "suspect one rank/bank/row/subchannel region\n",
-              prefix, out.c_str(), prefix);
+        log.emitf(
+            "%saddress-bit skew (>=85%% of errors share a value):%s\n%s-> errors cluster on one side of these bits: "
+            "suspect one rank/bank/row/subchannel region\n",
+            prefix, out.c_str(), prefix);
 }
 
 static volatile float g_fpu_sink = 0;
@@ -71,7 +72,7 @@ int run_suite(const Settings& s, Run& R) {
         std::vector<TestDef> tests;
         {
             std::istringstream is(suite_text());
-            parse_cfg_stream(is, "<built-in suite>", cfg, tests);
+            parse_cfg_stream(is, "<built-in suite>", cfg, tests, R.log);
         }
         cfg.threads = s.threads;
         cfg.large = s.largePages;
@@ -101,7 +102,7 @@ int run_suite(const Settings& s, Run& R) {
             sel.push_back(t);
         }
         if (sel.empty()) {
-            emitf("no tests selected\n");
+            R.log.emitf("no tests selected\n");
             return 2;
         }
 
@@ -118,40 +119,40 @@ int run_suite(const Settings& s, Run& R) {
             want = avail / 100 * 90;
         if (want > avail / 100 * 97) {
             want = avail / 100 * 97;
-            emitf("requested memory exceeds free memory; reduced to %llu MB to avoid paging\n",
-                  (unsigned long long)(want >> 20));
+            R.log.emitf("requested memory exceeds free memory; reduced to %llu MB to avoid paging\n",
+                        (unsigned long long)(want >> 20));
         }
         u64 per = want / R.T / MB2 * MB2;
         if (!per) {
-            emitf("not enough memory (need at least 2 MB per thread)\n");
+            R.log.emitf("not enough memory (need at least 2 MB per thread)\n");
             return 2;
         }
         u64 total = per * R.T;
         bool gotLP = false, locked = false;
-        emitf("%d threads, testing %.2f GiB of %.2f GiB free, %zu tests\n", R.T, total / 1073741824.0,
-              avail / 1073741824.0, sel.size());
-        emitf("run seed: 0x%016llX (%s)  to reproduce: --seed 0x%016llX with the same -mb and -t\n",
-              (unsigned long long)runSeed, s.seedSet ? "given" : "random", (unsigned long long)runSeed);
+        R.log.emitf("%d threads, testing %.2f GiB of %.2f GiB free, %zu tests\n", R.T, total / 1073741824.0,
+                    avail / 1073741824.0, sel.size());
+        R.log.emitf("run seed: 0x%016llX (%s)  to reproduce: --seed 0x%016llX with the same -mb and -t\n",
+                    (unsigned long long)runSeed, s.seedSet ? "given" : "random", (unsigned long long)runSeed);
         R.region = (u8*)plat::alloc(total, cfg.large, gotLP, locked);
         if (!R.region) {
-            emitf("allocation of %llu MB failed\n", (unsigned long long)(total >> 20));
+            R.log.emitf("allocation of %llu MB failed\n", (unsigned long long)(total >> 20));
             return 2;
         }
         R.regionBytes = total;
-        emitf("memory %s, large pages: %s\n",
-              locked ? "locked"
-                     : "NOT locked (the OS may page parts of it out; close other programs or lower Megabytes)",
-              gotLP       ? "yes (2MB contiguous physical runs)"
-              : cfg.large ? "no (needs 'Lock pages in memory' right; using normal pages)"
-                          : "off");
+        R.log.emitf("memory %s, large pages: %s\n",
+                    locked ? "locked"
+                           : "NOT locked (the OS may page parts of it out; close other programs or lower Megabytes)",
+                    gotLP       ? "yes (2MB contiguous physical runs)"
+                    : cfg.large ? "no (needs 'Lock pages in memory' right; using normal pages)"
+                                : "off");
         R.chunks.clear();
         for (int t = 0; t < R.T; t++)
             R.chunks.push_back({R.region + (u64)t * per, per / 64, (u64)t * (per / 64)});
         R.running = true;
         R.parallel([&](int tid) { std::memset(R.chunks[tid].base, 0, per); });
-        // CLI: errors also go to the log file. GUI: the front-end's emit sink already writes everything (incl. errors)
+        // CLI: errors also go to the log file. GUI: the front-end's log sink already writes everything (incl. errors)
         // to its log.
-        R.logf = g_emit ? nullptr : fopen(cfg.logFile.c_str(), "a");
+        R.logf = R.log.sink ? nullptr : fopen(cfg.logFile.c_str(), "a");
         if (R.logf)
             fprintf(R.logf, "---- ddr5test run, %.2f GiB, %d threads, seed 0x%016llX ----\n", total / 1073741824.0, R.T,
                     (unsigned long long)runSeed);
@@ -177,21 +178,22 @@ int run_suite(const Settings& s, Run& R) {
                 R.firstErrTest = -1;
                 R.tTestStart = plat::now();
                 R.set_label(t.name);
-                emitf("[loop %llu  %zu/%zu] %s\n", (unsigned long long)loop, ti + 1, sel.size(), t.name.c_str());
+                R.log.emitf("[loop %llu  %zu/%zu] %s\n", (unsigned long long)loop, ti + 1, sel.size(), t.name.c_str());
                 double ts = plat::now();
                 ALGOS.at(lower(t.p.str("algo", "fill")))(R, t.p);
                 double el = plat::now() - ts;
                 u64 bad = R.st.lines.load();
-                emitf("    %s  %.1fs  %.1f GB/s avg   coverage this test %.1fx\n",
-                      bad ? "FAIL" : (R.stop ? "STOP" : "pass"), el, R.done.load() / 1e9 / std::max(el, 1e-9),
-                      (double)R.vbytes.load() / (double)total);
+                R.log.emitf("    %s  %.1fs  %.1f GB/s avg   coverage this test %.1fx\n",
+                            bad ? "FAIL" : (R.stop ? "STOP" : "pass"), el, R.done.load() / 1e9 / std::max(el, 1e-9),
+                            (double)R.vbytes.load() / (double)total);
                 if (bad) {
                     failedTests++;
                     if (std::find(failedNames.begin(), failedNames.end(), t.name) == failedNames.end())
                         failedNames.push_back(t.name);
-                    emitf("    %llu bad lines, %llu bits; first error %.1f s into this test (%.1f s into the run)\n",
-                          (unsigned long long)bad, (unsigned long long)R.st.bits.load(), R.firstErrTest, R.firstErrRun);
-                    emit_skew("    ", R.st, total);
+                    R.log.emitf(
+                        "    %llu bad lines, %llu bits; first error %.1f s into this test (%.1f s into the run)\n",
+                        (unsigned long long)bad, (unsigned long long)R.st.bits.load(), R.firstErrTest, R.firstErrRun);
+                    emit_skew("    ", R.st, total, R.log);
                     std::string l1 = "    DQ lane errors  : ";
                     for (int l = 0; l < 32; l++)
                         if (R.st.lane[l])
@@ -200,13 +202,13 @@ int run_suite(const Settings& s, Run& R) {
                     for (int b = 0; b < 16; b++)
                         if (R.st.beat[b])
                             l2 += "[" + std::to_string(b) + "]=" + std::to_string(R.st.beat[b].load()) + " ";
-                    emit(l1 + "\n" + l2 + "\n");
-                    emitf("    x8 on-die-ECC codeword (8 lanes x 16 beats, assumed layout) bit-count 1/2/3-4/5+: "
-                          "%llu/%llu/%llu/%llu   re-read: transient=%llu stable=%llu unstable=%llu\n",
-                          (unsigned long long)R.st.blk[0].load(), (unsigned long long)R.st.blk[1].load(),
-                          (unsigned long long)R.st.blk[2].load(), (unsigned long long)R.st.blk[3].load(),
-                          (unsigned long long)R.st.trans.load(), (unsigned long long)R.st.stable.load(),
-                          (unsigned long long)R.st.unstable.load());
+                    R.log.emit(l1 + "\n" + l2 + "\n");
+                    R.log.emitf("    x8 on-die-ECC codeword (8 lanes x 16 beats, assumed layout) bit-count 1/2/3-4/5+: "
+                                "%llu/%llu/%llu/%llu   re-read: transient=%llu stable=%llu unstable=%llu\n",
+                                (unsigned long long)R.st.blk[0].load(), (unsigned long long)R.st.blk[1].load(),
+                                (unsigned long long)R.st.blk[2].load(), (unsigned long long)R.st.blk[3].load(),
+                                (unsigned long long)R.st.trans.load(), (unsigned long long)R.st.stable.load(),
+                                (unsigned long long)R.st.unstable.load());
                     R.total.lines += bad;
                     R.total.bits += R.st.bits.load();
                     for (int b = 0; b < 48; b++)
@@ -218,20 +220,20 @@ int run_suite(const Settings& s, Run& R) {
         for (auto& th : fpu)
             th.join();
         double el = plat::now() - t0;
-        emitf("\nfinished in %.0fs: %s (%llu bad lines, %d failing test runs)%s%s\n", el,
-              R.total.lines ? "ERRORS FOUND" : "no errors", (unsigned long long)R.total.lines.load(), failedTests,
-              R.stopReason.empty() ? "" : "  - ", R.stopReason.c_str());
-        emitf("total coverage: %.1fx of the %.2f GiB tested region verified\n", (double)R.vtotal.load() / (double)total,
-              total / 1073741824.0);
+        R.log.emitf("\nfinished in %.0fs: %s (%llu bad lines, %d failing test runs)%s%s\n", el,
+                    R.total.lines ? "ERRORS FOUND" : "no errors", (unsigned long long)R.total.lines.load(), failedTests,
+                    R.stopReason.empty() ? "" : "  - ", R.stopReason.c_str());
+        R.log.emitf("total coverage: %.1fx of the %.2f GiB tested region verified\n",
+                    (double)R.vtotal.load() / (double)total, total / 1073741824.0);
         if (!failedNames.empty()) {
-            emitf("tests with errors:\n");
+            R.log.emitf("tests with errors:\n");
             for (auto& n : failedNames)
-                emitf("    %s\n", n.c_str());
+                R.log.emitf("    %s\n", n.c_str());
         }
         if (R.total.lines) {
-            emitf("first error: %.1f s into the run   (run seed 0x%016llX)\nwhole run:\n", R.firstErrRun,
-                  (unsigned long long)runSeed);
-            emit_skew("    ", R.total, total);
+            R.log.emitf("first error: %.1f s into the run   (run seed 0x%016llX)\nwhole run:\n", R.firstErrRun,
+                        (unsigned long long)runSeed);
+            emit_skew("    ", R.total, total, R.log);
         }
         if (R.logf) {
             fclose(R.logf);
@@ -242,7 +244,7 @@ int run_suite(const Settings& s, Run& R) {
         R.running = false;
         return R.total.lines ? 1 : 0;
     } catch (const std::exception& e) {
-        emitf("internal error: %s\n", e.what());
+        R.log.emitf("internal error: %s\n", e.what());
         R.running = false;
         return 3;
     }

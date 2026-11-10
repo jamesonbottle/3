@@ -91,8 +91,8 @@ void Run::report(int tid, const u8* addr, const Line& e, const Line& a, const ch
             o +=
                 snprintf(buf + o, sizeof buf - o, "      qword %d: exp=%016llX act=%016llX xor=%016llX\n", j,
                          (unsigned long long)e.w[j], (unsigned long long)a.w[j], (unsigned long long)(e.w[j] ^ a.w[j]));
-    print_clear();
-    emit(buf);
+    log.print_clear();
+    log.emit(buf);
     if (logf) {
         fputs(buf, logf);
         fflush(logf);

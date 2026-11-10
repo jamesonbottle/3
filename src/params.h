@@ -53,6 +53,8 @@ struct Cfg {
     std::string logFile = "ddr5test.log";
 };
 
-bool parse_cfg_stream(std::istream& f, const std::string& path, Cfg& cfg, std::vector<TestDef>& tests);
+// Parse diagnostics (bad line, unknown key) go to `log`.
+bool parse_cfg_stream(std::istream& f, const std::string& path, Cfg& cfg, std::vector<TestDef>& tests,
+                      const Logger& log);
 
 } // namespace ddr5

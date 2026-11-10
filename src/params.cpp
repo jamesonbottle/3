@@ -51,7 +51,8 @@ std::vector<std::string> split_ws(const std::string& s, bool commas) {
     return o;
 }
 
-bool parse_cfg_stream(std::istream& f, const std::string& path, Cfg& cfg, std::vector<TestDef>& tests) {
+bool parse_cfg_stream(std::istream& f, const std::string& path, Cfg& cfg, std::vector<TestDef>& tests,
+                      const Logger& log) {
     std::string line, sect;
     Params defaults;
     TestDef* cur = nullptr;
@@ -77,7 +78,7 @@ bool parse_cfg_stream(std::istream& f, const std::string& path, Cfg& cfg, std::v
         }
         size_t eq = line.find('=');
         if (eq == std::string::npos) {
-            emitf("%s:%d: expected key = value\n", path.c_str(), lineno);
+            log.emitf("%s:%d: expected key = value\n", path.c_str(), lineno);
             continue;
         }
         std::string k = lower(trim(line.substr(0, eq))), v = trim(line.substr(eq + 1));
@@ -103,7 +104,7 @@ bool parse_cfg_stream(std::istream& f, const std::string& path, Cfg& cfg, std::v
             else if (k == "cache_mb")
                 cfg.cacheMB = pnum(v);
             else
-                emitf("%s:%d: unknown global key '%s'\n", path.c_str(), lineno, k.c_str());
+                log.emitf("%s:%d: unknown global key '%s'\n", path.c_str(), lineno, k.c_str());
         } else if (sect == "default")
             defaults.m[k] = v;
         else if (sect == "test" && cur) {

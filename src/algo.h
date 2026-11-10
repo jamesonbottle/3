@@ -31,7 +31,7 @@ struct OrderSpec {
     Order::K k = Order::SEQ;
     bool rev = false;
 };
-OrderSpec ospec(const Params& P, const char* key, const char* def);
+OrderSpec ospec(const Params& P, const char* key, const char* def, const Logger& log);
 std::vector<u64> stride_list(const Params& P, bool needed);
 void disturb_traffic(Run& R, const View& d, int mode, u64 passes, u64 seed);
 int parse_dmode(const std::string& s);
@@ -56,7 +56,7 @@ struct MVar {
     std::string label;
     std::vector<MEl> els;
 };
-std::vector<MVar> parse_march_variants(const std::string& str);
+std::vector<MVar> parse_march_variants(const std::string& str, const Logger& log);
 
 // ------------------------------------------------------------------ evolving data (algo_evolve.cpp)
 // ------------------------------------------------------------------ algo: evolve (data that changes from pass to pass)

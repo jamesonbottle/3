@@ -76,7 +76,7 @@ Edit `suite.cfg` (format documented at the top), run `python tools/gen_suite.py`
 ```
 src/types.h        u8..u64, the 64-byte Line, bit helpers
 src/platform.h     OS layer (plat::)      src/platform_win.cpp  src/platform_posix.cpp
-src/log.h/.cpp     output sink            src/params.h/.cpp     string helpers, Params, suite.cfg parser
+src/log.h/.cpp     Logger (output sink)            src/params.h/.cpp     string helpers, Params, suite.cfg parser
 src/seed.h/.cpp    run seed, hash mixer   src/order.h/.cpp      address orders
 src/gen.h/.cpp     data generators        src/lineio.h          64-byte store/load/verify (templates)
 src/run.h/.cpp     Run, walk, error report

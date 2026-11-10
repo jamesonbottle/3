@@ -14,7 +14,7 @@
 namespace ddr5 {
 
 // ------------------------------------------------------------------ algo: march (user-defined march tests)
-static std::vector<MEl> parse_march(const std::string& s) {
+static std::vector<MEl> parse_march(const std::string& s, const Logger& log) {
     std::vector<MEl> out;
     for (auto& tok : split_ws(s)) {
         if (tok.size() < 3)
@@ -23,7 +23,7 @@ static std::vector<MEl> parse_march(const std::string& s) {
         e.dir = tok[0];
         size_t a = tok.find('('), b = tok.rfind(')');
         if (a == std::string::npos || b == std::string::npos) {
-            emitf("bad march element '%s'\n", tok.c_str());
+            log.emitf("bad march element '%s'\n", tok.c_str());
             continue;
         }
         std::string body = tok.substr(a + 1, b - a - 1);
@@ -50,7 +50,7 @@ static std::vector<MEl> parse_march(const std::string& s) {
     }
     return out;
 }
-std::vector<MVar> parse_march_variants(const std::string& str) {
+std::vector<MVar> parse_march_variants(const std::string& str, const Logger& log) {
     std::vector<MVar> out;
     std::vector<std::string> parts;
     std::string cur;
@@ -72,7 +72,7 @@ std::vector<MVar> parse_march_variants(const std::string& str) {
             part = part.substr(eq + 1);
         }
         MVar v;
-        v.els = parse_march(part);
+        v.els = parse_march(part, log);
         if (v.els.empty())
             continue;
         v.label = label.empty() ? "march" + std::to_string(out.size() + 1) : label;
@@ -81,17 +81,17 @@ std::vector<MVar> parse_march_variants(const std::string& str) {
     return out;
 }
 void algo_march(Run& R, const Params& P) {
-    auto vars = build_vars(P);
-    auto mvs = parse_march_variants(P.str("march"));
+    auto vars = build_vars(P, R.log);
+    auto mvs = parse_march_variants(P.str("march"), R.log);
     if (mvs.empty()) {
-        emitf("march: no elements\n");
+        R.log.emitf("march: no elements\n");
         return;
     }
     std::vector<std::pair<std::string, OrderSpec>> orders;
     for (auto& w : P.words("order", "seq")) {
         OrderSpec os;
         if (!Order::parse(w, os.k, os.rev)) {
-            emitf("bad order '%s'\n", w.c_str());
+            R.log.emitf("bad order '%s'\n", w.c_str());
             continue;
         }
         orders.push_back({w, os});

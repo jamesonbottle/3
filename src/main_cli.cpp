@@ -156,20 +156,21 @@ int main(int argc, char** argv) {
         if (bad)
             return 2;
     }
+    static Logger log; // outlives the static Run below
     if (list) {
         Cfg cfg;
         std::vector<TestDef> tests;
         std::istringstream is(suite_text());
-        parse_cfg_stream(is, "<built-in>", cfg, tests);
+        parse_cfg_stream(is, "<built-in>", cfg, tests, log);
         int n = 0;
         for (auto& t : tests)
             printf("%3d %s %-9s %s\n", ++n, t.p.flag("quick", false) ? "Q" : " ", t.p.str("algo", "fill").c_str(),
                    t.name.c_str());
         return 0;
     }
-    g_console = true;
-    g_tty = IS_TTY(1) != 0;
-    static Run R;
+    log.console = true;
+    log.tty = IS_TTY(1) != 0;
+    static Run R(log);
     plat::install_ctrlc(&R.stop);
     return run_suite(s, R);
 }
