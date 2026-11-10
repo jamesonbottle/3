@@ -1,0 +1,15 @@
+# Style for src/ and tools/*.cpp. Run tools/format.sh (CI runs tools/format.sh --check with clang-format 18).
+BasedOnStyle: LLVM
+IndentWidth: 4
+ColumnLimit: 120
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortLambdasOnASingleLine: Inline
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AllowShortBlocksOnASingleLine: Empty
+AlwaysBreakTemplateDeclarations: Yes
+BreakBeforeBraces: Attach
+PointerAlignment: Left
+# Include order is hand-kept: Windows headers depend on it (windows.h before commctrl.h), so the formatter must not sort.
+SortIncludes: Never
+FixNamespaceComments: true

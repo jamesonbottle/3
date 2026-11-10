@@ -10,45 +10,105 @@
 #include <string>
 #include <vector>
 
-// ------------------------------------------------------------------ algo: fill (write -> [disturb] -> [dwell] -> verify xN)
+// ------------------------------------------------------------------ algo: fill (write -> [disturb] -> [dwell] ->
+// verify xN)
 void algo_fill(Run& R, const Params& P) {
-    auto vars = build_vars(P); OrderSpec wo = ospec(P, "order", "seq"), vo = ospec(P, "verify_order", P.str("order", "seq").c_str());
+    auto vars = build_vars(P);
+    OrderSpec wo = ospec(P, "order", "seq"), vo = ospec(P, "verify_order", P.str("order", "seq").c_str());
     bool strided = wo.k == Order::STRIDE || vo.k == Order::STRIDE;
     auto strides = stride_list(P, strided);
     bool both = P.flag("both", false), cross = P.flag("cross", false);
-    int width = (int)P.num("width", 32); bool nt = P.flag("nt", false), fl = P.flag("flush", true);
+    int width = (int)P.num("width", 32);
+    bool nt = P.flag("nt", false), fl = P.flag("flush", true);
     u64 reads = std::max<u64>(1, P.num("reads", 1)), wl = R.window_lines(P);
-    auto dwells = P.nums("dwell_ms", "0"); if (dwells.empty()) dwells.push_back(0);
-    std::vector<int> dmodes; for (auto& w : P.words("disturb")) { int m = parse_dmode(lower(w)); if (m >= 0) dmodes.push_back(m); }
-    if (dmodes.empty()) dmodes.push_back(-1);
+    auto dwells = P.nums("dwell_ms", "0");
+    if (dwells.empty())
+        dwells.push_back(0);
+    std::vector<int> dmodes;
+    for (auto& w : P.words("disturb")) {
+        int m = parse_dmode(lower(w));
+        if (m >= 0)
+            dmodes.push_back(m);
+    }
+    if (dmodes.empty())
+        dmodes.push_back(-1);
     u64 dpasses = std::max<u64>(1, P.num("disturb_passes", 2));
-    if (dmodes[0] >= 0 && !disturb_possible(R, wl, R.testName.c_str())) dmodes.assign(1, -1);
-    struct Job { std::string label; const Gen* g; bool inv; u64 stride; u64 dwell; int dmode; };
-    std::vector<Job> jobs; const char* dn[] = {"r", "w", "rw"};
-    for (auto& v : vars) for (u64 s : strides) for (int inv = 0; inv <= (both ? 1 : 0); inv++) for (u64 dw : dwells) for (int dm : dmodes)
-        jobs.push_back({v.label + (inv ? " [inverted]" : "") + (strided ? " stride=" + std::to_string(s * 64) + "B" : "") +
-                        (dwells.size() > 1 ? " dwell=" + std::to_string(dw) + "ms" : "") + (dmodes.size() > 1 ? std::string(" disturb=") + dn[dm] : ""), &v.g, (bool)inv, s, dw, dm});
-    u64 base = R.winctr[R.testName]; R.winctr[R.testName] += jobs.size();
+    if (dmodes[0] >= 0 && !disturb_possible(R, wl, R.testName.c_str()))
+        dmodes.assign(1, -1);
+    struct Job {
+        std::string label;
+        const Gen* g;
+        bool inv;
+        u64 stride;
+        u64 dwell;
+        int dmode;
+    };
+    std::vector<Job> jobs;
+    const char* dn[] = {"r", "w", "rw"};
+    for (auto& v : vars)
+        for (u64 s : strides)
+            for (int inv = 0; inv <= (both ? 1 : 0); inv++)
+                for (u64 dw : dwells)
+                    for (int dm : dmodes)
+                        jobs.push_back({v.label + (inv ? " [inverted]" : "") +
+                                            (strided ? " stride=" + std::to_string(s * 64) + "B" : "") +
+                                            (dwells.size() > 1 ? " dwell=" + std::to_string(dw) + "ms" : "") +
+                                            (dmodes.size() > 1 ? std::string(" disturb=") + dn[dm] : ""),
+                                        &v.g, (bool)inv, s, dw, dm});
+    u64 base = R.winctr[R.testName];
+    R.winctr[R.testName] += jobs.size();
     R.parallel([&](int tid) {
         for (size_t ji = 0; ji < jobs.size(); ji++) {
-            if (R.stop) break;
-            const Job& j = jobs[ji]; if (tid == 0) R.set_label(j.label);
+            if (R.stop)
+                break;
+            const Job& j = jobs[ji];
+            if (tid == 0)
+                R.set_label(j.label);
             View w = R.view(tid, wl, base + ji), vw = R.view(cross ? (tid + 1) % R.T : tid, wl, base + ji);
-            Order ow, ov; ow.init(wo.k, w.n, j.stride, 1 + ji); ov.init(vo.k, vw.n, j.stride, 77 + ji);
+            Order ow, ov;
+            ow.init(wo.k, w.n, j.stride, 1 + ji);
+            ov.init(vo.k, vw.n, j.stride, 77 + ji);
             dispatch(width, nt, fl, [&](auto Wc, auto NTc, auto FLc) {
                 using io = IO<decltype(Wc)::value, decltype(NTc)::value, decltype(FLc)::value>;
-                walk(R, ow, wo.rev, [&](u64 i) { u8* a = w.base + i * 64; Line l; j.g->make(w.g + i, a, j.inv, l); io::store(a, l); });
-                _mm_sfence(); R.sync();
-#ifdef DDR5TEST_INJECT  // self-test only: corrupt memory between write and verify
-                if (tid == 0 && ji == 0) { u8* c = w.base + 640 * 64 + 20; c[0] ^= 0x05; c[1] ^= 0x10; w.base[900 * 64 + 4] ^= 0x80; for (int k = 0; k < 40; k++) w.base[(4096 + k) * 64 + 8] ^= 1; _mm_clflush(c); _mm_mfence(); }
+                walk(R, ow, wo.rev, [&](u64 i) {
+                    u8* a = w.base + i * 64;
+                    Line l;
+                    j.g->make(w.g + i, a, j.inv, l);
+                    io::store(a, l);
+                });
+                _mm_sfence();
+                R.sync();
+#ifdef DDR5TEST_INJECT // self-test only: corrupt memory between write and verify
+                if (tid == 0 && ji == 0) {
+                    u8* c = w.base + 640 * 64 + 20;
+                    c[0] ^= 0x05;
+                    c[1] ^= 0x10;
+                    w.base[900 * 64 + 4] ^= 0x80;
+                    for (int k = 0; k < 40; k++)
+                        w.base[(4096 + k) * 64 + 8] ^= 1;
+                    _mm_clflush(c);
+                    _mm_mfence();
+                }
                 R.sync();
 #endif
-                if (j.dmode >= 0) { disturb_traffic(R, R.dview(tid, wl, base + ji), j.dmode, dpasses, 0xD157 + tid + ji + g_salt); _mm_sfence(); R.sync(); }
-                if (j.dwell) { if (tid == 0) R.sleep_ms(j.dwell); R.sync(); }
+                if (j.dmode >= 0) {
+                    disturb_traffic(R, R.dview(tid, wl, base + ji), j.dmode, dpasses, 0xD157 + tid + ji + g_salt);
+                    _mm_sfence();
+                    R.sync();
+                }
+                if (j.dwell) {
+                    if (tid == 0)
+                        R.sleep_ms(j.dwell);
+                    R.sync();
+                }
                 for (u64 r = 0; r < reads && !R.stop; r++)
                     walk(R, ov, vo.rev, [&](u64 i) {
-                        const u8* a = vw.base + i * 64; Line e, act; j.g->make(vw.g + i, a, j.inv, e); R.vtick();
-                        if (!io::verify(a, e, act)) R.report(tid, a, e, act, "verify");
+                        const u8* a = vw.base + i * 64;
+                        Line e, act;
+                        j.g->make(vw.g + i, a, j.inv, e);
+                        R.vtick();
+                        if (!io::verify(a, e, act))
+                            R.report(tid, a, e, act, "verify");
                     });
             });
             R.sync();

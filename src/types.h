@@ -3,15 +3,20 @@
 #include <cstdint>
 #include <immintrin.h>
 #if defined(_MSC_VER)
-  #include <intrin.h>
-  #define CBAR() _ReadWriteBarrier()
+#include <intrin.h>
+#define CBAR() _ReadWriteBarrier()
 #else
-  #define CBAR() asm volatile("" ::: "memory")
+#define CBAR() asm volatile("" ::: "memory")
 #endif
 
-using u8 = uint8_t; using u16 = uint16_t; using u32 = uint32_t; using u64 = uint64_t;
+using u8 = uint8_t;
+using u16 = uint16_t;
+using u32 = uint32_t;
+using u64 = uint64_t;
 
-struct alignas(64) Line { u64 w[8]; };
+struct alignas(64) Line {
+    u64 w[8];
+};
 static_assert(sizeof(Line) == 64, "Line must be one 64B burst (BL16 x 32-bit DDR5 subchannel)");
 
 inline u64 splitmix(u64 x) {
@@ -29,7 +34,9 @@ inline int pc32(u32 v) {
 }
 inline int clz64(u64 v) {
 #if defined(_MSC_VER)
-    unsigned long i; _BitScanReverse64(&i, v); return 63 - (int)i;
+    unsigned long i;
+    _BitScanReverse64(&i, v);
+    return 63 - (int)i;
 #else
     return __builtin_clzll(v);
 #endif
