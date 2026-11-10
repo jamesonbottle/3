@@ -512,6 +512,7 @@ struct Stats {
         for (auto& a : abit) a = 0;
     }
 };
+static thread_local u64 t_vcount = 0;   // lines this thread has verified since its last flush into Run::vbytes / vtotal
 struct Run {
     Cfg cfg; int T = 1; std::vector<Chunk> chunks; std::atomic<bool> stop{false};
     std::atomic<u64> done{0}; Stats st, total; std::barrier<>* bar = nullptr;
@@ -522,10 +523,12 @@ struct Run {
     u64 stopCoverage = 0; double stopSeconds = 0; std::string stopReason;
     std::atomic<u64> errTotal{0}; std::atomic<bool> running{false};
 
-    // call once per verified 64B line; flushes to the shared counters every 64K lines per thread
-    void vtick() {
-        thread_local u64 c = 0;
-        if (++c >= 0x10000) { vbytes.fetch_add(c * 64, std::memory_order_relaxed); vtotal.fetch_add(c * 64, std::memory_order_relaxed); c = 0; }
+    // call once per verified 64B line; flushes to the shared counters every 64K lines per thread, and once more when the thread ends
+    // (parallel() calls vflush), so the lines counted since the last 64K boundary are not lost
+    void vtick() { if (++t_vcount >= 0x10000) vflush(); }
+    void vflush() {
+        u64 c = t_vcount; t_vcount = 0;
+        if (c) { vbytes.fetch_add(c * 64, std::memory_order_relaxed); vtotal.fetch_add(c * 64, std::memory_order_relaxed); }
     }
     void sync() { bar->arrive_and_wait(); }
     void set_label(const std::string& s) { std::lock_guard<std::mutex> l(mu); label = s; }
@@ -613,7 +616,7 @@ void Run::report(int tid, const u8* addr, const Line& e, const Line& a, const ch
 
 template <class F> void Run::parallel(F fn) {
     std::barrier<> b(T); bar = &b; std::atomic<int> running{T}; std::vector<std::thread> th;
-    for (int t = 0; t < T; t++) th.emplace_back([&, t] { plat::pin(t); fn(t); b.arrive_and_drop(); running--; });
+    for (int t = 0; t < T; t++) th.emplace_back([&, t] { plat::pin(t); fn(t); vflush(); b.arrive_and_drop(); running--; });
     double t0 = plat::now(), tl = t0, hb = t0; u64 dl = done.load();
     while (running.load() > 0) {
         std::this_thread::sleep_for(std::chrono::milliseconds(250));
@@ -1064,7 +1067,7 @@ static void algo_pagemix(Run& R, const Params& P) {
     double secs = (double)P.num("seconds", 30); const auto& tab = sat_table();
     u64 np = R.regionBytes / 4096; if (np < (u64)R.T * 8) { emitf("    pagemix: region too small, skipped\n"); return; }
     std::unique_ptr<std::atomic<u8>[]> busy(new std::atomic<u8>[np]); for (u64 i = 0; i < np; i++) busy[i].store(0, std::memory_order_relaxed);
-    std::vector<PagePat> pp(np);
+    std::vector<PagePat> pp(np); std::vector<u8> filled(np, 0);   // a page the fill phase never reached has no pattern yet: the final verify must skip it
     u64 wsum = 0; for (auto& t : tab) for (int w = 0; w < 4; w++) wsum += t.weight[w];
     auto pick = [&](u64 r) { PagePat q{}; u64 x = r % (wsum * 2); q.inv = (u8)(x & 1); x >>= 1;
         for (size_t i = 0; i < tab.size(); i++) for (int w = 0; w < 4; w++) { if (x < (u64)tab[i].weight[w]) { q.pat = (u16)i; q.rep = (u8)w; return q; } x -= tab[i].weight[w]; }
@@ -1074,8 +1077,11 @@ static void algo_pagemix(Run& R, const Params& P) {
         u64 rng = splitmix(0x5A7 + tid * 7919 + g_salt); auto nx = [&] { rng = splitmix(rng); return rng; };
         if (tid == 0) R.set_label("page shuffle: fill");
         for (u64 pg = tid; pg < np && !R.stop; pg += R.T) {
-            pp[pg] = pick(nx()); u8* a = R.region + pg * 4096; Gen g = gen(pp[pg]); pm_fill<1>(a, g, pp[pg].inv);
+            pp[pg] = pick(nx()); u8* a = R.region + pg * 4096; Gen g = gen(pp[pg]); pm_fill<1>(a, g, pp[pg].inv); filled[pg] = 1;
             if (((pg / R.T + 1) & 0x3FF) == 0) R.tick();
+#ifdef DDR5TEST_INJECT  // self-test only: with DDR5TEST_STOP_IN_FILL set, stop in the middle of the fill phase (pages after this point are never filled)
+            if (tid == 0 && pg >= 1000 && getenv("DDR5TEST_STOP_IN_FILL")) R.stop = true;
+#endif
         }
         _mm_sfence(); R.sync();
         if (tid == 0) R.set_label("page shuffle: copy / invert / refill / check");
@@ -1102,6 +1108,7 @@ static void algo_pagemix(Run& R, const Params& P) {
 #endif
         if (tid == 0) R.set_label("page shuffle: final verify of all pages");
         for (u64 pg = tid; pg < np; pg += R.T) {
+            if (!filled[pg]) continue;
             Gen g = gen(pp[pg]); pm_check<1>(R, tid, R.region + pg * 4096, g, pp[pg].inv, "pagemix-final");
             if (((pg / R.T + 1) & 0x3FF) == 0) R.tick();
         }

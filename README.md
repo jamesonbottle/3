@@ -11,7 +11,7 @@ The window follows the familiar two-tab layout (Testing / Advanced) used by popu
 3. Press **Start**. It runs until you press **Stop**. Coverage is how many times the tested region has been verified (100 % = one full pass; it keeps counting past that).
 4. Any error is written to `ddr5ramtest.log` next to the exe (or to `%TEMP%` if that folder is not writable - the status line says which), with address, expected/actual data, which DQ lane/beat was hit, which x8-device on-die-ECC codeword that would be *if* the DIMM uses x8 chips and the controller does not swizzle lanes (a heuristic, see *Honest limits*), and whether a re-read shows it as transient, stable or unstable.
 
-*Stop on error* is ticked by default, so the run ends at the first error; untick it to keep going and collect statistics (error counts per lane/beat/address bit). The console tool defaults to the opposite and reports its result in the exit code (0 = clean, 1 = errors found, 2 = could not start, 3 = internal error); with `--test-seconds N` it caps the timed tests, and when its output is piped it prints a progress line every 30 s instead of the live line.
+*Stop on error* is ticked by default, so the run ends at the first error; untick it to keep going and collect statistics (error counts per lane/beat/address bit). The console tool defaults to the opposite and reports its result in the exit code (0 = clean, 1 = errors found, 2 = bad option or option value / could not start, 3 = internal error; a typo such as `-mb abc` is rejected, not silently replaced by a default); with `--test-seconds N` it caps the timed tests, and when its output is piped it prints a progress line every 30 s instead of the live line.
 
 Advanced tab
 - **CPU cache**: Default (each test decides), Bypass (clflush every access so reads come from DRAM), Cached, Non-temporal (streaming stores).
@@ -27,6 +27,7 @@ Ideas taken from [stressapptest](https://github.com/stressapptest/stressapptest)
 - **Pattern table**: walking ones / inverse-alternating ones / zeros, 0/1, 5/A, 8b10b-style, "busy" patterns, each held for 1/2/4/8 words (32 to 256-bit bus-width repeat) and inverted too.
 - **Page shuffle**: all memory in 4 KB pages with random patterns; threads copy pages onto each other (verifying the source line by line), invert pages in place four times (up, down, down, up), refill and re-check them, mixing cache-hot and flushed accesses, then verify every page. Data keeps moving between cores and channels while staying predictable.
 - **Cache coherency**: threads share a few cache lines, each owning one byte; sums are checked after every round. This tests the cores' caches and fabric, not DRAM cells.
+- Closed-source testers' internals are not public, so nothing here is derived from them.
 
 ## Honest limits
 
@@ -39,11 +40,10 @@ Ideas taken from [stressapptest](https://github.com/stressapptest/stressapptest)
 ## Self-test
 
 ```
-tools/selftest.sh        # Linux, g++ 11+ with AVX2; takes ~2 minutes; exits non-zero on any failure
+tools/selftest.sh        # Linux, g++ 11+ with AVX2; takes a few minutes; exits non-zero on any failure
 ```
 
-It builds the engine twice (normal, and with `-DDDR5TEST_INJECT`, which plants known bit flips between write and verify), then checks that address orders are true permutations, that the rotating windows cover the whole region, that clean runs of 14 representative tests report nothing, and that the injected faults are found exactly (42 lines / 44 bits in the pattern test, plus the page-shuffle and coherency injections) without hanging in stop-on-error mode. It runs in CI on every push. It proves the detection logic; it cannot prove anything about a particular DIMM.
-- Closed-source testers' internals are not public, so nothing here is derived from them.
+It builds the engine twice (normal, and with `-DDDR5TEST_INJECT`, which plants known bit flips between write and verify), then checks that address orders are true permutations, that the rotating windows cover the whole region, that clean runs of 14 representative tests report nothing, that bad option values are rejected, that the coverage counter is exact on a tiny region, and that the injected faults are found exactly (42 lines / 44 bits in the pattern test, plus the page-shuffle and coherency injections) without hanging in stop-on-error mode. One more check stops the page shuffle in the middle of its fill phase and requires that only the planted flip is reported (pages that were never filled must not be verified). Every run is wrapped in `timeout` (default 120 s, `TMO=` to change), so a hang fails the self-test instead of stalling CI. It runs in CI on every push. It proves the detection logic; it cannot prove anything about a particular DIMM.
 
 ## Build
 

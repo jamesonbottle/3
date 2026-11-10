@@ -1,5 +1,6 @@
 // ddr5test CLI front-end (console). Same engine and built-in suite as the GUI; used for headless runs and for development on Linux.
 #include "engine.h"
+#include <cerrno>
 #ifdef _WIN32
   #include <io.h>
   #define IS_TTY(fd) _isatty(fd)
@@ -17,17 +18,39 @@ static void usage() {
 int main(int argc, char** argv) {
     Settings s; s.loops = 1; s.stopOnError = false; bool list = false;
     for (int i = 1; i < argc; i++) {
-        std::string a = argv[i]; auto nx = [&]() -> std::string { return i + 1 < argc ? argv[++i] : ""; };
-        if (a == "-mb") s.megabytes = strtoull(nx().c_str(), nullptr, 10);
-        else if (a == "-t") s.threads = atoi(nx().c_str());
-        else if (a == "-l") s.loops = strtoull(nx().c_str(), nullptr, 10);
+        // Option values are checked: a typo such as "-mb abc" must not silently turn into "use 90 % of free RAM" (exit code 2 instead).
+        std::string a = argv[i]; bool bad = false;
+        auto nx = [&]() -> std::string {
+            if (i + 1 >= argc) { fprintf(stderr, "option %s needs a value\n", a.c_str()); bad = true; return ""; }
+            return argv[++i];
+        };
+        auto num = [&](u64 maxv) -> u64 {   // non-negative whole number <= maxv
+            std::string v = nx(); if (bad) return 0;
+            char* e = nullptr; errno = 0; unsigned long long x = v.empty() || v[0] == '-' || v[0] == '+' ? 0 : strtoull(v.c_str(), &e, 10);
+            if (v.empty() || v[0] == '-' || v[0] == '+' || !e || *e || errno || x > maxv) { fprintf(stderr, "bad value '%s' for %s (expected a whole number from 0 to %llu)\n", v.c_str(), a.c_str(), (unsigned long long)maxv); bad = true; return 0; }
+            return x;
+        };
+        auto choice = [&](std::initializer_list<const char*> names) -> int {   // index of the (case-insensitive) name, or -1 after reporting an error
+            std::string v = lower(nx()); if (bad) return -1;
+            int k = 0; for (const char* n : names) { if (v == n) return k; k++; }
+            std::string all; for (const char* n : names) all += std::string(all.empty() ? "" : "|") + n;
+            fprintf(stderr, "bad value '%s' for %s (expected %s)\n", v.c_str(), a.c_str(), all.c_str()); bad = true; return -1;
+        };
+        const u64 BIG = ~0ull >> 1;
+        if (a == "-mb") s.megabytes = num(BIG >> 20);
+        else if (a == "-t") s.threads = (int)num(4096);
+        else if (a == "-l") s.loops = num(BIG);
         else if (a == "-f") s.filter = nx();
         else if (a == "--quick") s.suite = 1;
-        else if (a == "--coverage") s.coverageStop = strtoull(nx().c_str(), nullptr, 10);
-        else if (a == "--minutes") s.minutes = atof(nx().c_str());
-        else if (a == "--test-seconds") s.testSeconds = strtoull(nx().c_str(), nullptr, 10);
-        else if (a == "--cache") { std::string v = lower(nx()); s.cacheMode = v == "bypass" ? 1 : v == "cached" ? 2 : v == "nt" ? 3 : 0; }
-        else if (a == "--rng") { std::string v = lower(nx()); s.rngMode = v == "splitmix" ? 1 : v == "murmur" ? 2 : v == "xorshift" ? 3 : 0; }
+        else if (a == "--coverage") s.coverageStop = num(BIG >> 8);
+        else if (a == "--minutes") {
+            std::string v = nx(); char* e = nullptr; double m = v.empty() ? -1.0 : strtod(v.c_str(), &e);
+            if (!bad && (v.empty() || !e || *e || !(m >= 0.0) || m > 1e7)) { fprintf(stderr, "bad value '%s' for --minutes (expected a number of minutes >= 0)\n", v.c_str()); bad = true; }
+            s.minutes = m;
+        }
+        else if (a == "--test-seconds") s.testSeconds = num(BIG);
+        else if (a == "--cache") { int k = choice({"default", "bypass", "cached", "nt"}); if (k >= 0) s.cacheMode = k; }
+        else if (a == "--rng") { int k = choice({"default", "splitmix", "murmur", "xorshift"}); if (k >= 0) s.rngMode = k; }
         else if (a == "--fpu") s.stressFpu = true;
         else if (a == "--keep-going") s.stopOnError = false;
         else if (a == "--stop-on-error") s.stopOnError = true;
@@ -35,10 +58,11 @@ int main(int argc, char** argv) {
         else if (a == "--log") s.logFile = nx();
         else if (a == "--list") list = true;
         else { usage(); return a == "-h" || a == "--help" ? 0 : 2; }
+        if (bad) return 2;
     }
     if (list) {
         Cfg cfg; std::vector<TestDef> tests; std::istringstream is(suite_text()); parse_cfg_stream(is, "<built-in>", cfg, tests);
-        int n = 0; for (auto& t : tests) printf("%3d %s %-8s %s\n", ++n, t.p.flag("quick", false) ? "Q" : " ", t.p.str("algo", "fill").c_str(), t.name.c_str());
+        int n = 0; for (auto& t : tests) printf("%3d %s %-9s %s\n", ++n, t.p.flag("quick", false) ? "Q" : " ", t.p.str("algo", "fill").c_str(), t.name.c_str());
         return 0;
     }
     g_console = true; g_tty = IS_TTY(1) != 0;
