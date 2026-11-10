@@ -25,6 +25,8 @@
 #include <memory>
 #include <unordered_map>
 
+using namespace ddr5;
+
 #if defined(_MSC_VER)
 #pragma comment(lib, "comctl32.lib")
 #pragma comment(lib, "user32.lib")

@@ -12,6 +12,8 @@
 #include <memory>
 #include <vector>
 
+namespace ddr5 {
+
 // ------------------------------------------------------------------ algo: pagemix (stressapptest-style page shuffle)
 // All memory is split into 4 KB pages and every page gets a random pattern from the stressapptest-style table. Threads
 // then pick random page pairs and (a) copy source -> destination while verifying the source line by line, (b) invert a
@@ -222,3 +224,5 @@ void algo_pagemix(Run& R, const Params& P) {
         R.sync();
     });
 }
+
+} // namespace ddr5

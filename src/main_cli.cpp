@@ -21,6 +21,8 @@
 #define IS_TTY(fd) isatty(fd)
 #endif
 
+using namespace ddr5;
+
 static void usage() {
     puts("ddr5test_cli [-mb MB] [-t threads] [-l loops] [-f name-filter] [--quick] [--coverage PCT] [--minutes N]\n"
          "             [--test-seconds N] [--cache default|bypass|cached|nt] [--rng default|splitmix|murmur|xorshift] "

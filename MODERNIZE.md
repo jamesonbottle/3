@@ -41,7 +41,7 @@ Windows cannot be built in this environment. Windows-only files can be compile-c
 | Item | What | Status |
 |------|------|--------|
 | M1 | Formatting + lint config (was point 5) | done |
-| M2 | Namespace `ddr5` (point 2) | todo |
+| M2 | Namespace `ddr5` (point 2) | done |
 | M3 | Generated `suite_data.h` cannot drift (point 8) | todo |
 | M4 | Fault-injection hooks out of the algorithms (point 6) | todo |
 | M5 | Remove global mutable state (point 1), sub-steps 5a-5c | todo |
@@ -71,9 +71,9 @@ gate passes.
 
 Why: `lower`, `trim`, `emit`, `walk`, `Order`, `Run`, `Line` ... live in the global namespace.
 
-- [ ] Wrap the contents of every `src/*.h` / `src/*.cpp` except `main_*.cpp` in `namespace ddr5 { ... }` (keep macros such as `CBAR` and `#include`s outside). `plat::` becomes `ddr5::plat`.
-- [ ] `main_cli.cpp`, `main_gui.cpp`, `tools/unit_tests.cpp`: `using namespace ddr5;` after the includes (qualify instead where it is one or two names).
-- [ ] Windows: `platform_win.cpp` and `main_gui.cpp` still compile (zig check above); `app.rc` is unaffected.
+- [x] Wrap the contents of every `src/*.h` / `src/*.cpp` except `main_*.cpp` in `namespace ddr5 { ... }` (keep macros such as `CBAR` and `#include`s outside). `plat::` becomes `ddr5::plat`.
+- [x] `main_cli.cpp`, `main_gui.cpp`, `tools/unit_tests.cpp`: `using namespace ddr5;` after the includes (qualify instead where it is one or two names).
+- [x] Windows: `platform_win.cpp` and `main_gui.cpp` still compile (zig check above); `app.rc` is unaffected.
 
 Done when: `nm -C build/libddr5engine.a | grep ' [TDBR] ' | grep -v 'ddr5::'` lists nothing the project defines (only compiler/std symbols); gate passes.
 
@@ -147,4 +147,5 @@ Done when: `ctest` runs both and passes; gate passes.
 ## Log
 
 - 2026-11-10 plan written.
-- 2026-11-10 M1 done (commit "modernize M1: add .clang-format ..." + follow-up with blame-ignore, CI format check, tidy). Engine objects byte-identical before/after reformat; gate green. Next: M2.
+- 2026-11-10 M1 done (commit "modernize M1: add .clang-format ..." + follow-up with blame-ignore, CI format check, tidy). Engine objects byte-identical before/after reformat; gate green. 
+- 2026-11-10 M2 done. Every project symbol in libddr5engine(.inject).a is in `ddr5::` (nm check, std/compiler symbols filtered); `plat` is now `ddr5::plat`; main_cli/main_gui/unit_tests use `using namespace ddr5;`. Macros (`CBAR`) stay global. Windows files compile for x86_64-windows-gnu. Gate green. Next: M3.

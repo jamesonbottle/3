@@ -9,6 +9,8 @@
 #define CBAR() asm volatile("" ::: "memory")
 #endif
 
+namespace ddr5 {
+
 using u8 = uint8_t;
 using u16 = uint16_t;
 using u32 = uint32_t;
@@ -49,3 +51,5 @@ inline u64 rev64(u64 x) {
     x = ((x >> 16) & 0x0000FFFF0000FFFFull) | ((x & 0x0000FFFF0000FFFFull) << 16);
     return (x >> 32) | (x << 32);
 }
+
+} // namespace ddr5

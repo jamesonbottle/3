@@ -10,6 +10,8 @@
 #include <string>
 #include <vector>
 
+namespace ddr5 {
+
 // ------------------------------------------------------------------ algo: evolve (data that changes from pass to pass)
 // Every other data test writes a pattern once, or rewrites IDENTICAL data (rwstorm), so a write that never lands leaves
 // exactly the bytes the test expects: a lost write is invisible to it. Here every line has its own update period
@@ -112,3 +114,5 @@ void algo_evolve(Run& R, const Params& P) {
         }
     });
 }
+
+} // namespace ddr5

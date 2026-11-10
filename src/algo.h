@@ -9,6 +9,8 @@
 #include "seed.h"
 #include "types.h"
 
+namespace ddr5 {
+
 using AlgoFn = void (*)(Run&, const Params&);
 
 void algo_fill(Run& R, const Params& P);
@@ -76,3 +78,5 @@ inline void evo_make(u64 g, u64 gen, u64 seed, Line& o) {
     for (int j = 0; j < 8; j++)
         o.w[j] = mix64(k + (g << 3) + j); // mix64: follows the selected RNG (Advanced > RNG / --rng)
 }
+
+} // namespace ddr5

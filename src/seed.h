@@ -2,6 +2,8 @@
 // seed.h - run seed, salt and the selectable hash mixer.
 #include "types.h"
 
+namespace ddr5 {
+
 // Every random choice in the engine (order permutations, hash/addr seeds, disturb traffic, page shuffle, chase layout,
 // coherency) is a pure function of g_salt, and g_salt is a pure function of the run seed and the loop number. So one
 // printed number reproduces a whole run (given the same memory size and thread count, which decide the data layout; the
@@ -39,3 +41,5 @@ inline u64 mix64(u64 x) {
         return x ^ (x >> 31);
     }
 }
+
+} // namespace ddr5

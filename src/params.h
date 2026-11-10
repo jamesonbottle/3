@@ -7,6 +7,8 @@
 #include "log.h"
 #include "types.h"
 
+namespace ddr5 {
+
 std::string trim(std::string s);
 std::string lower(std::string s);
 u64 pnum(std::string s); // number with optional K/M/G suffix, or 0x hex
@@ -52,3 +54,5 @@ struct Cfg {
 };
 
 bool parse_cfg_stream(std::istream& f, const std::string& path, Cfg& cfg, std::vector<TestDef>& tests);
+
+} // namespace ddr5

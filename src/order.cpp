@@ -4,6 +4,8 @@
 #include "params.h"
 #include "seed.h"
 
+namespace ddr5 {
+
 bool Order::parse(const std::string& s, K& k, bool& rev) {
     std::string v = lower(s);
     rev = false;
@@ -54,3 +56,5 @@ void Order::init(K kk, u64 nn, u64 stride, u64 seed) {
         break;
     }
 }
+
+} // namespace ddr5

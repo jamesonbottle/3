@@ -11,6 +11,8 @@
 #include <string>
 #include <vector>
 
+namespace ddr5 {
+
 // ------------------------------------------------------------------ algo: chase (random pointer chase, K independent
 // chains = max bank-level parallelism)
 void algo_chase(Run& R, const Params& P) {
@@ -83,3 +85,5 @@ void algo_chase(Run& R, const Params& P) {
             }
     });
 }
+
+} // namespace ddr5

@@ -11,6 +11,8 @@
 #include <string>
 #include <vector>
 
+namespace ddr5 {
+
 // ------------------------------------------------------------------ algo: probe (row-hit vs row-conflict latency by
 // address distance) Informational, not pass/fail. Reads line A, then times a read of line B = A + stride (both flushed
 // from cache first). B in the same bank but a different row => row conflict (PRE + ACT + CAS: ~tRP + tRCD + CL),
@@ -119,3 +121,5 @@ void algo_probe(Run& R, const Params& P) {
         }
     });
 }
+
+} // namespace ddr5

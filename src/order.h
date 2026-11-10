@@ -3,6 +3,8 @@
 #include <string>
 #include "types.h"
 
+namespace ddr5 {
+
 // ------------------------------------------------------------------ address orders
 // An order is a bijection q -> line index over the part it covers; leftover tail lines are visited sequentially.
 struct Order {
@@ -52,3 +54,5 @@ struct Order {
         return q < m ? at(q) : q;
     }
 };
+
+} // namespace ddr5

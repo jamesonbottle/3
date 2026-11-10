@@ -4,6 +4,8 @@
 #include <cstdlib>
 #include <sstream>
 
+namespace ddr5 {
+
 std::string trim(std::string s) {
     size_t a = s.find_first_not_of(" \t\r\n"), b = s.find_last_not_of(" \t\r\n");
     return a == std::string::npos ? "" : s.substr(a, b - a + 1);
@@ -113,3 +115,5 @@ bool parse_cfg_stream(std::istream& f, const std::string& path, Cfg& cfg, std::v
     }
     return true;
 }
+
+} // namespace ddr5

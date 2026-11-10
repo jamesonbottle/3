@@ -10,6 +10,8 @@
 #include <string>
 #include <vector>
 
+namespace ddr5 {
+
 // ------------------------------------------------------------------ algo: fill (write -> [disturb] -> [dwell] ->
 // verify xN)
 void algo_fill(Run& R, const Params& P) {
@@ -115,3 +117,5 @@ void algo_fill(Run& R, const Params& P) {
         }
     });
 }
+
+} // namespace ddr5

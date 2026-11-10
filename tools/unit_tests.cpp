@@ -15,6 +15,8 @@
 #include "suite.h"
 #include "types.h"
 
+using namespace ddr5;
+
 static int g_fail = 0;
 #define CHECK(cond, ...)                                                                                               \
     do {                                                                                                               \

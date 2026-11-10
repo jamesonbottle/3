@@ -4,6 +4,8 @@
 #include "run.h"
 #include "types.h"
 
+namespace ddr5 {
+
 struct Settings {
     u64 megabytes = 0;       // 0 = auto (90% of free memory)
     int threads = 0;         // 0 = all logical CPUs
@@ -26,3 +28,5 @@ struct Settings {
 std::string suite_text(); // the built-in suite.cfg text (compiled in, see suite_data.h)
 // Runs the built-in suite until finished or R.stop. Poll R (vtotal, errTotal, label, tStart, ...) from another thread.
 int run_suite(const Settings& s, Run& R);
+
+} // namespace ddr5

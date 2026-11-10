@@ -2,6 +2,8 @@
 #include "algo.h"
 #include "lineio.h"
 
+namespace ddr5 {
+
 OrderSpec ospec(const Params& P, const char* key, const char* def) {
     OrderSpec s;
     if (!Order::parse(P.str(key, def), s.k, s.rev)) {
@@ -61,3 +63,5 @@ const std::map<std::string, AlgoFn> ALGOS = {
     {"fill", algo_fill},       {"march", algo_march},        {"hammer", algo_hammer}, {"copy", algo_copy},
     {"chase", algo_chase},     {"rwstorm", algo_rwstorm},    {"evolve", algo_evolve}, {"probe", algo_probe},
     {"pagemix", algo_pagemix}, {"coherency", algo_coherency}};
+
+} // namespace ddr5

@@ -4,6 +4,8 @@
 #include <utility>
 #include "log.h"
 
+namespace ddr5 {
+
 const std::vector<SatPat>& sat_table() {
     static const std::vector<SatPat> t = [] {
         std::vector<SatPat> v;
@@ -248,3 +250,5 @@ std::vector<Var> build_vars(const Params& P) {
     }
     return out;
 }
+
+} // namespace ddr5

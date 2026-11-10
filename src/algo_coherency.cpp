@@ -12,6 +12,8 @@
 #include <cstring>
 #include <string>
 
+namespace ddr5 {
+
 // ------------------------------------------------------------------ algo: coherency (stressapptest-style
 // cache-coherency check) A few cache lines are shared by all threads. Every thread owns one byte in each line and
 // increments it at random lines (false sharing: the line ping-pongs between cores while each core only touches its own
@@ -85,3 +87,5 @@ void algo_coherency(Run& R, const Params& P) {
         }
     });
 }
+
+} // namespace ddr5

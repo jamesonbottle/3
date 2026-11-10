@@ -16,6 +16,8 @@
 #include "platform.h"
 #include "types.h"
 
+namespace ddr5 {
+
 // ------------------------------------------------------------------ run context
 struct Chunk {
     u8* base;
@@ -200,3 +202,5 @@ inline void walk(Run& R, const Order& o, bool down, F&& f) {
         }
     }
 }
+
+} // namespace ddr5

@@ -11,6 +11,8 @@
 #include <string>
 #include <vector>
 
+namespace ddr5 {
+
 // ------------------------------------------------------------------ algo: march (user-defined march tests)
 static std::vector<MEl> parse_march(const std::string& s) {
     std::vector<MEl> out;
@@ -206,3 +208,5 @@ void algo_march(Run& R, const Params& P) {
         }
     });
 }
+
+} // namespace ddr5

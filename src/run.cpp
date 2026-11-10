@@ -3,6 +3,8 @@
 #include <cstring>
 #include "lineio.h"
 
+namespace ddr5 {
+
 void Run::report(int tid, const u8* addr, const Line& e, const Line& a, const char* phase, bool reread) {
     const u32* eb = (const u32*)&e;
     const u32* ab = (const u32*)&a;
@@ -96,3 +98,5 @@ void Run::report(int tid, const u8* addr, const Line& e, const Line& a, const ch
         fflush(logf);
     }
 }
+
+} // namespace ddr5

@@ -18,6 +18,8 @@
 // Included here ONLY: it defines static arrays, a second include would duplicate the 16 KB of text.
 #include "suite_data.h"
 
+namespace ddr5 {
+
 std::string suite_text() {
     std::string t;
     for (int i = 0; i < SUITE_CFG_NPARTS; i++)
@@ -245,3 +247,5 @@ int run_suite(const Settings& s, Run& R) {
         return 3;
     }
 }
+
+} // namespace ddr5

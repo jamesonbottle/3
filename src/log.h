@@ -3,6 +3,8 @@
 #include <functional>
 #include <string>
 
+namespace ddr5 {
+
 extern std::function<void(const std::string&)>
     g_emit;            // output sink: stdout in CLI mode (when empty), log pane in the GUI
 extern bool g_console; // console front-end: live progress output
@@ -11,3 +13,5 @@ extern bool
 void emit(const std::string& t);
 void emitf(const char* fmt, ...);
 void print_clear();
+
+} // namespace ddr5

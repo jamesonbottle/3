@@ -10,6 +10,8 @@
 #include <string>
 #include <vector>
 
+namespace ddr5 {
+
 // ------------------------------------------------------------------ algo: hammer (n-sided row hammer / activation-rate
 // stress)
 void algo_hammer(Run& R, const Params& P) {
@@ -94,3 +96,5 @@ void algo_hammer(Run& R, const Params& P) {
         }
     });
 }
+
+} // namespace ddr5

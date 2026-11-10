@@ -4,6 +4,8 @@
 #include <type_traits>
 #include "types.h"
 
+namespace ddr5 {
+
 // ------------------------------------------------------------------ line I/O at selectable width / cache behaviour
 // W = access width in bytes (8 scalar, 16 SSE2, 32 AVX2); NT = non-temporal stores; FL = clflush after each access
 // so verification really comes from DRAM instead of the cache hierarchy.
@@ -91,3 +93,5 @@ inline void dispatch(int width, bool nt, bool fl, F&& f) {
     else
         d3(IC<32>{});
 }
+
+} // namespace ddr5

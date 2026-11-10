@@ -10,6 +10,8 @@
 #include <string>
 #include <vector>
 
+namespace ddr5 {
+
 // ------------------------------------------------------------------ algo: rwstorm (concurrent read + write traffic on
 // the same memory) Even threads keep rewriting their chunk with IDENTICAL data while their odd partner thread verifies
 // that chunk at the same time. Stores and loads are in flight together (bus turnaround, write queue drain,
@@ -82,3 +84,5 @@ void algo_rwstorm(Run& R, const Params& P) {
         }
     });
 }
+
+} // namespace ddr5

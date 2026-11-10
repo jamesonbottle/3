@@ -11,6 +11,8 @@
 #include <thread>
 #include "platform.h"
 
+namespace ddr5 {
+
 namespace plat {
 static std::atomic<bool>* g_stop = nullptr;
 
@@ -52,4 +54,6 @@ void release(void* p, u64 b) {
     munmap(p, b);
 }
 } // namespace plat
+
+} // namespace ddr5
 #endif // !_WIN32

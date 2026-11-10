@@ -3,6 +3,8 @@
 #include <cstdarg>
 #include <cstdio>
 
+namespace ddr5 {
+
 std::function<void(const std::string&)> g_emit;
 bool g_console = false;
 bool g_tty = true; // console front-end: stdout is a terminal (live progress line); false when piped / in CI (a progress
@@ -27,3 +29,5 @@ void print_clear() {
     if (g_console && g_tty)
         printf("\r%*s\r", 118, "");
 }
+
+} // namespace ddr5

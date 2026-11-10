@@ -11,6 +11,8 @@
 #include <thread>
 #include "platform.h"
 
+namespace ddr5 {
+
 namespace plat {
 static std::atomic<bool>* g_stop = nullptr;
 
@@ -108,4 +110,6 @@ void release(void* p, u64) {
     VirtualFree(p, 0, MEM_RELEASE);
 }
 } // namespace plat
+
+} // namespace ddr5
 #endif // _WIN32

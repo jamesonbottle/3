@@ -7,6 +7,8 @@
 #include "seed.h"
 #include "types.h"
 
+namespace ddr5 {
+
 // ------------------------------------------------------------------ data generators (pure functions of line index)
 using Beats = std::array<u32, 16>; // 16 beats x 32 DQ = one BL16 burst on one DDR5 subchannel
 // Data patterns in the style of Google's stressapptest table (the exact table is reimplemented from its public
@@ -71,3 +73,5 @@ struct Var {
 };
 
 std::vector<Var> build_vars(const Params& P);
+
+} // namespace ddr5

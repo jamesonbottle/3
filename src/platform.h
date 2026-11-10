@@ -4,6 +4,8 @@
 #include <chrono>
 #include "types.h"
 
+namespace ddr5 {
+
 namespace plat {
 void install_ctrlc(std::atomic<bool>* s); // Ctrl-C / SIGINT sets *s
 int ncpu();                               // logical CPUs
@@ -20,3 +22,5 @@ inline double now() {
     return duration<double>(steady_clock::now().time_since_epoch()).count();
 }
 } // namespace plat
+
+} // namespace ddr5

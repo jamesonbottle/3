@@ -11,6 +11,8 @@
 #include <string>
 #include <vector>
 
+namespace ddr5 {
+
 // ------------------------------------------------------------------ algo: copy (real-world bulk copy engines)
 void algo_copy(Run& R, const Params& P) {
     auto vars = build_vars(P);
@@ -83,3 +85,5 @@ void algo_copy(Run& R, const Params& P) {
         }
     });
 }
+
+} // namespace ddr5
