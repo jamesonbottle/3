@@ -18,7 +18,7 @@ namespace ddr5 {
 // read-after-write hazards in the controller, power-delivery load) yet every read must still match. Finally every
 // thread verifies its own chunk.
 void algo_rwstorm(Run& R, const Params& P) {
-    auto vars = build_vars(P, R.salt, R.log);
+    auto vars = build_vars(P, R.salt, R.rng, R.log);
     OrderSpec wo = ospec(P, "order", "random", R.log), vo = ospec(P, "verify_order", "seq", R.log);
     auto strides = stride_list(P, wo.k == Order::STRIDE || vo.k == Order::STRIDE);
     int width = (int)P.num("width", 32);

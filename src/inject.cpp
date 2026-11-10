@@ -38,7 +38,7 @@ void evolve_last_pass(Run& R, int tid, size_t ji, const View& w, u64 p, u64 pass
                 u8* a = w.base + i * 64;
                 if (!lost && p % per == 0) {
                     Line old;
-                    evo_make(g, p / per - 1, seed, old);
+                    evo_make(g, p / per - 1, seed, R.rng, old);
                     store(a, old);
                     lost = true;
                 } else if (!flip && p % per != 0) {

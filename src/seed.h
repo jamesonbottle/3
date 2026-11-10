@@ -12,10 +12,10 @@ u64 salt_for(u64 runSeed, u64 loop); // differs per loop: a long soak never repe
 u64 fresh_seed();                    // random_device alone can be deterministic on old MinGW, so the clock is mixed in
 
 // Selectable mixer for 'hash' data (GUI: Advanced > RNG). Orders keep splitmix so permutations stay stable.
-extern int g_rng; // 0 splitmix64, 1 murmur3 fmix64, 2 xorshift64*
-inline u64 mix64(u64 x) {
+// rng: 0 splitmix64, 1 murmur3 fmix64, 2 xorshift64* (Run::rng, copied into Gen::rng by build_vars).
+inline u64 mix64(u64 x, int rng) {
     x += 0x9E3779B97F4A7C15ull;
-    switch (g_rng) {
+    switch (rng) {
     case 1:
         x ^= x >> 33;
         x *= 0xff51afd7ed558ccdull;

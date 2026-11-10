@@ -16,7 +16,7 @@ namespace ddr5 {
 // ------------------------------------------------------------------ algo: fill (write -> [disturb] -> [dwell] ->
 // verify xN)
 void algo_fill(Run& R, const Params& P) {
-    auto vars = build_vars(P, R.salt, R.log);
+    auto vars = build_vars(P, R.salt, R.rng, R.log);
     OrderSpec wo = ospec(P, "order", "seq", R.log), vo = ospec(P, "verify_order", P.str("order", "seq").c_str(), R.log);
     bool strided = wo.k == Order::STRIDE || vo.k == Order::STRIDE;
     auto strides = stride_list(P, strided);

@@ -25,7 +25,7 @@ namespace ddr5 {
 // Memory therefore holds a mix of generations at all times, and old data must survive while its neighbours are being
 // rewritten.
 void algo_evolve(Run& R, const Params& P) {
-    auto vars = build_vars(P, R.salt, R.log); // data = hash: one variant per seed (seeds = N)
+    auto vars = build_vars(P, R.salt, R.rng, R.log); // data = hash: one variant per seed (seeds = N)
     OrderSpec wo = ospec(P, "order", "random", R.log), vo = ospec(P, "verify_order", "seq", R.log);
     auto strides = stride_list(P, wo.k == Order::STRIDE || vo.k == Order::STRIDE);
     int width = (int)P.num("width", 32);
@@ -58,7 +58,7 @@ void algo_evolve(Run& R, const Params& P) {
                 using io = IO<decltype(Wc)::value, decltype(NTc)::value, decltype(FLc)::value>;
                 walk(R, ow, wo.rev, [&](u64 i) {
                     Line l;
-                    evo_make(w.g + i, 0, j.seed, l);
+                    evo_make(w.g + i, 0, j.seed, R.rng, l);
                     io::store(w.base + i * 64, l);
                 }); // generation 0 everywhere
                 _mm_sfence();
@@ -69,7 +69,7 @@ void algo_evolve(Run& R, const Params& P) {
                         if (p % per)
                             return; // not this line's turn: it must keep its old data
                         Line l;
-                        evo_make(g, p / per, j.seed, l);
+                        evo_make(g, p / per, j.seed, R.rng, l);
                         io::store(w.base + i * 64, l);
                     });
                     _mm_sfence();
@@ -79,7 +79,7 @@ void algo_evolve(Run& R, const Params& P) {
                         const u8* a = vw.base + i * 64;
                         u64 g = vw.g + i;
                         Line e, act;
-                        evo_make(g, p / evo_period(g, j.seed, maxp), j.seed, e);
+                        evo_make(g, p / evo_period(g, j.seed, maxp), j.seed, R.rng, e);
                         R.vtick();
                         if (!io::verify(a, e, act))
                             R.report(tid, a, e, act, "evolve-verify");

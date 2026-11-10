@@ -81,7 +81,7 @@ std::vector<MVar> parse_march_variants(const std::string& str, const Logger& log
     return out;
 }
 void algo_march(Run& R, const Params& P) {
-    auto vars = build_vars(P, R.salt, R.log);
+    auto vars = build_vars(P, R.salt, R.rng, R.log);
     auto mvs = parse_march_variants(P.str("march"), R.log);
     if (mvs.empty()) {
         R.log.emitf("march: no elements\n");

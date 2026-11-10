@@ -79,7 +79,7 @@ int run_suite(const Settings& s, Run& R) {
         cfg.stopOnErr = s.stopOnError;
         cfg.logFile = s.logFile;
         cfg.loops = s.loops;
-        g_rng = s.rngMode == 2 ? 1 : s.rngMode == 3 ? 2 : 0;
+        R.rng = s.rngMode == 2 ? 1 : s.rngMode == 3 ? 2 : 0;
         const u64 runSeed = s.seedSet ? s.seed : fresh_seed();
         std::vector<TestDef> sel;
         std::string flt = lower(s.filter);

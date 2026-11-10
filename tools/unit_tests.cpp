@@ -138,14 +138,13 @@ static void test_mixers() {
     const int N = 8192;
     static u32 cnt[64][64];
     for (int mode = 0; mode < 3; mode++) {
-        g_rng = mode;
         memset(cnt, 0, sizeof cnt);
         u64 rs = 0x1234;
         for (int n = 0; n < N; n++) {
             rs = splitmix(rs);
-            u64 h0 = mix64(rs);
+            u64 h0 = mix64(rs, mode);
             for (int i = 0; i < 64; i++) {
-                u64 d = h0 ^ mix64(rs ^ (1ull << i));
+                u64 d = h0 ^ mix64(rs ^ (1ull << i), mode);
                 for (int j = 0; j < 64; j++)
                     cnt[i][j] += (d >> j) & 1;
             }
@@ -163,7 +162,6 @@ static void test_mixers() {
               "%s: %d of 4096 input->output bit pairs biased by more than 0.06 (worst %.3f), %d never flip",
               names[mode], bad, worst, dead);
     }
-    g_rng = 0;
 }
 
 // One run seed must determine every random choice (hash seeds, random permutations), and different seeds / loops / runs
@@ -182,7 +180,7 @@ static void test_seed() {
     auto sig = [&](u64 seed, u64 loop) {
         u64 salt = salt_for(seed, loop);
         Sig s;
-        for (auto& v : build_vars(p, salt, test_log))
+        for (auto& v : build_vars(p, salt, 0, test_log))
             s.hash.push_back(v.g.seed);
         Order o;
         o.init(Order::RANDOM, 5000, 1, 1, salt);
@@ -230,12 +228,11 @@ static void test_evolve() {
               (unsigned long long)hist[per], (unsigned long long)lines, (unsigned long long)(lines / maxp));
     for (int mode = 0; mode < 3;
          mode++) { // the data follows the selected RNG, so every mixer must keep (line, generation) pairs apart
-        g_rng = mode;
         std::set<u64> seen;
         Line a{}, b{}, c{};
-        evo_make(7, 3, seed, a);
-        evo_make(7, 3, seed, b);
-        evo_make(7, 2, seed, c);
+        evo_make(7, 3, seed, mode, a);
+        evo_make(7, 3, seed, mode, b);
+        evo_make(7, 2, seed, mode, c);
         CHECK(!memcmp(&a, &b, 64), "rng %d: evolving data must be a pure function of (line, generation, seed)", mode);
         CHECK(memcmp(&a, &c, 64) != 0,
               "rng %d: the previous generation must differ from the new one (otherwise a lost write goes unseen)",
@@ -244,12 +241,11 @@ static void test_evolve() {
         for (u64 g = 0; g < 500; g++)
             for (u64 gen = 0; gen < 16; gen++) {
                 Line l{};
-                evo_make(g, gen, seed, l);
+                evo_make(g, gen, seed, mode, l);
                 dup += !seen.insert(l.w[0]).second;
             }
         CHECK(!dup, "rng %d: %zu (line, generation) pairs produced the same first qword", mode, dup);
     }
-    g_rng = 0;
 }
 
 // Every style / pattern name used by suite.cfg expands to at least one variant (a typo would silently drop a test).
@@ -268,7 +264,7 @@ static void test_suite_parses() {
         CHECK(ALGOS.count(algo) == 1, "test '%s': unknown algo '%s'", t.name.c_str(), algo.c_str());
         if (algo == "fill" || algo == "march" || algo == "rwstorm" || algo == "evolve" || algo == "copy" ||
             algo == "chase")
-            CHECK(!build_vars(t.p, 0, test_log).empty(), "test '%s': no data variants (typo in data/style/pattern?)",
+            CHECK(!build_vars(t.p, 0, 0, test_log).empty(), "test '%s': no data variants (typo in data/style/pattern?)",
                   t.name.c_str());
         if (algo == "march")
             CHECK(!parse_march_variants(t.p.str("march"), test_log).empty(), "test '%s': march parses to nothing",

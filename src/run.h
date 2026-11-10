@@ -55,6 +55,7 @@ struct Run {
     Cfg cfg;
     u64 salt = 0; // from the run seed and the loop number (run_suite sets it per loop): every random choice is a
                   // function of it
+    int rng = 0;  // hash mixer chosen in Settings (0 splitmix64, 1 murmur3 fmix64, 2 xorshift64*); see mix64()
     int T = 1;
     std::vector<Chunk> chunks;
     std::atomic<bool> stop{false};

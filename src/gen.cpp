@@ -157,7 +157,7 @@ static void expand_style(const std::string& st, const Params& P, std::vector<std
         log.emitf("unknown style '%s'\n", st.c_str());
 }
 
-std::vector<Var> build_vars(const Params& P, u64 salt, const Logger& log) {
+static std::vector<Var> build_vars_impl(const Params& P, u64 salt, const Logger& log) {
     std::vector<Var> out;
     std::string data = lower(P.str("data", "pattern"));
     u64 seed = P.num("seed", 0);
@@ -249,6 +249,13 @@ std::vector<Var> build_vars(const Params& P, u64 salt, const Logger& log) {
         if (!o2.empty())
             out = o2;
     }
+    return out;
+}
+
+std::vector<Var> build_vars(const Params& P, u64 salt, int rng, const Logger& log) {
+    std::vector<Var> out = build_vars_impl(P, salt, log);
+    for (auto& v : out)
+        v.g.rng = rng;
     return out;
 }
 
