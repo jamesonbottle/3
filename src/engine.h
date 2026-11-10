@@ -25,6 +25,7 @@
 #include <functional>
 #include <map>
 #include <mutex>
+#include <random>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -241,7 +242,15 @@ static bool parse_cfg_stream(std::istream& f, const std::string& path, Cfg& cfg,
 
 // ------------------------------------------------------------------ address orders
 // An order is a bijection q -> line index over the part it covers; leftover tail lines are visited sequentially.
-static u64 g_salt = 0;  // changes every loop so a long soak never repeats the same seeds/permutations (loop 1 = 0 = reproducible)
+// Every random choice in the engine (order permutations, hash/addr seeds, disturb traffic, page shuffle, chase layout, coherency) is a pure
+// function of g_salt, and g_salt is a pure function of the run seed and the loop number. So one printed number reproduces a whole run
+// (given the same memory size and thread count, which decide the data layout; the timed tests also depend on thread timing).
+static u64 g_salt = 0;
+static u64 salt_for(u64 runSeed, u64 loop) { return splitmix(splitmix(runSeed) ^ (loop * 0xD6E8FEB86659FD93ull)); }   // differs per loop: a long soak never repeats itself
+static u64 fresh_seed() {   // random_device alone can be deterministic on old MinGW, so the clock is mixed in
+    std::random_device rd; u64 a = ((u64)rd() << 32) | rd();
+    return splitmix(a ^ splitmix((u64)std::chrono::high_resolution_clock::now().time_since_epoch().count()));
+}
 struct Order {
     enum K { SEQ, STRIDE, RANDOM, BITREV, GRAY, BUTTERFLY } k = SEQ;
     u64 n = 0, m = 0, S = 1, cnt = 1; int bits = 0, h = 0; u64 fk[4] = {};
@@ -293,7 +302,10 @@ static inline u64 mix64(u64 x) {
     x += 0x9E3779B97F4A7C15ull;
     switch (g_rng) {
     case 1: x ^= x >> 33; x *= 0xff51afd7ed558ccdull; x ^= x >> 33; x *= 0xc4ceb9fe1a85ec53ull; x ^= x >> 33; return x;
-    case 2: x ^= x >> 12; x ^= x << 25; x ^= x >> 27; return x * 0x2545F4914F6CDD1Dull;
+    // xorshift64* needs a real finalizer: its single multiply only moves information UP, so the low output bits ignored most of the
+    // input (308 of 4096 input-bit -> output-bit pairs never flipped; tools/unit_tests.cpp measures this). Fold the high half back down,
+    // multiply again and fold once more, as splitmix/murmur do.
+    case 2: x ^= x >> 12; x ^= x << 25; x ^= x >> 27; x *= 0x2545F4914F6CDD1Dull; x ^= x >> 29; x *= 0xBF58476D1CE4E5B9ull; return x ^ (x >> 32);
     default: x = (x ^ (x >> 30)) * 0xBF58476D1CE4E5B9ull; x = (x ^ (x >> 27)) * 0x94D049BB133111EBull; return x ^ (x >> 31);
     }
 }
@@ -970,6 +982,71 @@ static void algo_rwstorm(Run& R, const Params& P) {
     });
 }
 
+// ------------------------------------------------------------------ algo: evolve (data that changes from pass to pass)
+// Every other data test writes a pattern once, or rewrites IDENTICAL data (rwstorm), so a write that never lands leaves exactly the bytes
+// the test expects: a lost write is invisible to it. Here every line has its own update period p(line) in 1..maxp passes and after pass P
+// must hold generation P / p(line); its data is a pure function of (line, generation, seed), so nothing is stored on the side. A pass
+// rewrites only the lines whose period divides P, then verifies EVERY line:
+//   - a rewritten line that still shows its previous generation = a lost / misdirected write (looks perfectly valid in a static test)
+//   - a line that was NOT rewritten but changed = a stray write, disturb or leak from the traffic around it
+// Memory therefore holds a mix of generations at all times, and old data must survive while its neighbours are being rewritten.
+static inline u64 evo_period(u64 g, u64 seed, u64 maxp) { return 1 + splitmix(g ^ seed) % maxp; }
+static inline void evo_make(u64 g, u64 gen, u64 seed, Line& o) {
+    u64 k = splitmix(seed ^ (gen * 0xD6E8FEB86659FD93ull));
+    for (int j = 0; j < 8; j++) o.w[j] = mix64(k + (g << 3) + j);   // mix64: follows the selected RNG (Advanced > RNG / --rng)
+}
+static void algo_evolve(Run& R, const Params& P) {
+    auto vars = build_vars(P);   // data = hash: one variant per seed (seeds = N)
+    OrderSpec wo = ospec(P, "order", "random"), vo = ospec(P, "verify_order", "seq");
+    auto strides = stride_list(P, wo.k == Order::STRIDE || vo.k == Order::STRIDE);
+    int width = (int)P.num("width", 32); bool nt = P.flag("nt", false), fl = P.flag("flush", true), cross = P.flag("cross", false);
+    u64 passes = std::max<u64>(1, P.num("passes", 16)), maxp = std::max<u64>(1, P.num("period", 8)), wl = R.window_lines(P);
+    struct Job { std::string label; u64 seed, stride; };
+    std::vector<Job> jobs;
+    for (auto& v : vars) for (u64 s : strides) jobs.push_back({"evolve " + v.label + (strides.size() > 1 ? " stride=" + std::to_string(s * 64) + "B" : ""), v.g.seed, s});
+    u64 base = R.winctr[R.testName]; R.winctr[R.testName] += jobs.size();
+    R.parallel([&](int tid) {
+        for (size_t ji = 0; ji < jobs.size(); ji++) {
+            if (R.stop) break;
+            const Job& j = jobs[ji]; if (tid == 0) R.set_label(j.label);
+            View w = R.view(tid, wl, base + ji), vw = R.view(cross ? (tid + 1) % R.T : tid, wl, base + ji);
+            Order ow, ov; ow.init(wo.k, w.n, j.stride, 21 + ji); ov.init(vo.k, vw.n, j.stride, 55 + ji);
+            dispatch(width, nt, fl, [&](auto Wc, auto NTc, auto FLc) {
+                using io = IO<decltype(Wc)::value, decltype(NTc)::value, decltype(FLc)::value>;
+                walk(R, ow, wo.rev, [&](u64 i) { Line l; evo_make(w.g + i, 0, j.seed, l); io::store(w.base + i * 64, l); });   // generation 0 everywhere
+                _mm_sfence(); R.sync();
+                for (u64 p = 1; p <= passes && !R.stop; p++) {
+                    walk(R, ow, wo.rev, [&](u64 i) {
+                        u64 g = w.g + i, per = evo_period(g, j.seed, maxp); if (p % per) return;   // not this line's turn: it must keep its old data
+                        Line l; evo_make(g, p / per, j.seed, l); io::store(w.base + i * 64, l);
+                    });
+                    _mm_sfence(); R.sync();
+#ifdef DDR5TEST_INJECT  // self-test only, last pass: (1) undo one rewrite = a lost write, (2) flip one bit in a line that was not rewritten
+                    if (p == passes) {
+                        if (tid == 0 && ji == 0) {
+                            bool lost = false, flip = false;
+                            for (u64 i = 0; i < w.n && !(lost && flip); i++) {
+                                u64 g = w.g + i, per = evo_period(g, j.seed, maxp); u8* a = w.base + i * 64;
+                                if (!lost && p % per == 0) { Line old; evo_make(g, p / per - 1, j.seed, old); io::store(a, old); lost = true; }
+                                else if (!flip && p % per != 0) { a[8] ^= 0x20; _mm_clflush(a); flip = true; }
+                            }
+                            _mm_sfence(); _mm_mfence();
+                        }
+                        R.sync();
+                    }
+#endif
+                    walk(R, ov, vo.rev, [&](u64 i) {
+                        const u8* a = vw.base + i * 64; u64 g = vw.g + i; Line e, act; evo_make(g, p / evo_period(g, j.seed, maxp), j.seed, e); R.vtick();
+                        if (!io::verify(a, e, act)) R.report(tid, a, e, act, "evolve-verify");
+                    });
+                    R.sync();
+                }
+            });
+            R.sync();
+        }
+    });
+}
+
 // ------------------------------------------------------------------ algo: probe (row-hit vs row-conflict latency by address distance)
 // Informational, not pass/fail. Reads line A, then times a read of line B = A + stride (both flushed from cache first).
 // B in the same bank but a different row => row conflict (PRE + ACT + CAS: ~tRP + tRCD + CL), noticeably slower.
@@ -1162,7 +1239,7 @@ static void algo_coherency(Run& R, const Params& P) {
 // ====================================================================== suite + run API (shared by the GUI and the CLI front-ends)
 using AlgoFn = void (*)(Run&, const Params&);
 static const std::map<std::string, AlgoFn> ALGOS = {{"fill", algo_fill}, {"march", algo_march}, {"hammer", algo_hammer}, {"copy", algo_copy},
-                                                    {"chase", algo_chase}, {"rwstorm", algo_rwstorm}, {"probe", algo_probe},
+                                                    {"chase", algo_chase}, {"rwstorm", algo_rwstorm}, {"evolve", algo_evolve}, {"probe", algo_probe},
                                                     {"pagemix", algo_pagemix}, {"coherency", algo_coherency}};
 
 #include "suite_data.h"   // generated from suite.cfg by tools/gen_suite.py: the whole test list is compiled in
@@ -1181,6 +1258,8 @@ struct Settings {
     std::string logFile = "ddr5test.log";
     u64 coverageStop = 0; double minutes = 0; u64 loops = 0; std::string filter;
     u64 testSeconds = 0;          // >0 caps the duration of the timed tests (page shuffle, cache coherency); 0 = as in suite.cfg
+    bool seedSet = false;         // false = pick a fresh random seed for this run; true = use `seed` (reproduce an earlier run)
+    u64 seed = 0;
 };
 
 static void emit_skew(const char* prefix, const Stats& s, u64 regionBytes) {
@@ -1212,6 +1291,7 @@ static int run_suite(const Settings& s, Run& R) {
         { std::istringstream is(suite_text()); parse_cfg_stream(is, "<built-in suite>", cfg, tests); }
         cfg.threads = s.threads; cfg.large = s.largePages; cfg.stopOnErr = s.stopOnError; cfg.logFile = s.logFile; cfg.loops = s.loops;
         g_rng = s.rngMode == 2 ? 1 : s.rngMode == 3 ? 2 : 0;
+        const u64 runSeed = s.seedSet ? s.seed : fresh_seed();
         std::vector<TestDef> sel; std::string flt = lower(s.filter);
         for (auto& t : tests) {
             if (t.p.has("enabled") && !t.p.flag("enabled", true)) continue;
@@ -1234,6 +1314,7 @@ static int run_suite(const Settings& s, Run& R) {
         u64 per = want / R.T / MB2 * MB2; if (!per) { emitf("not enough memory (need at least 2 MB per thread)\n"); return 2; }
         u64 total = per * R.T; bool gotLP = false, locked = false;
         emitf("%d threads, testing %.2f GiB of %.2f GiB free, %zu tests\n", R.T, total / 1073741824.0, avail / 1073741824.0, sel.size());
+        emitf("run seed: 0x%016llX (%s)  to reproduce: --seed 0x%016llX with the same -mb and -t\n", (unsigned long long)runSeed, s.seedSet ? "given" : "random", (unsigned long long)runSeed);
         R.region = (u8*)plat::alloc(total, cfg.large, gotLP, locked);
         if (!R.region) { emitf("allocation of %llu MB failed\n", (unsigned long long)(total >> 20)); return 2; }
         R.regionBytes = total;
@@ -1244,14 +1325,14 @@ static int run_suite(const Settings& s, Run& R) {
         R.parallel([&](int tid) { std::memset(R.chunks[tid].base, 0, per); });
         // CLI: errors also go to the log file. GUI: the front-end's emit sink already writes everything (incl. errors) to its log.
         R.logf = g_emit ? nullptr : fopen(cfg.logFile.c_str(), "a");
-        if (R.logf) fprintf(R.logf, "---- ddr5test run, %.2f GiB, %d threads ----\n", total / 1073741824.0, R.T);
+        if (R.logf) fprintf(R.logf, "---- ddr5test run, %.2f GiB, %d threads, seed 0x%016llX ----\n", total / 1073741824.0, R.T, (unsigned long long)runSeed);
 
         std::atomic<bool> fpuStop{false}; std::vector<std::thread> fpu;
         if (s.stressFpu) for (int i = 0; i < R.T; i++) fpu.emplace_back(fpu_stress, std::ref(fpuStop));
 
         double t0 = plat::now(); R.tStart = t0; int failedTests = 0; std::vector<std::string> failedNames;
         for (u64 loop = 1; (!cfg.loops || loop <= cfg.loops) && !R.stop; loop++) {
-            g_salt = (loop - 1) * 0x9E3779B97F4A7C15ull;  // loop 1 is reproducible; later loops use fresh seeds/permutations
+            g_salt = salt_for(runSeed, loop);  // each loop gets fresh seeds/permutations, all derived from the run seed
             for (size_t ti = 0; ti < sel.size() && !R.stop; ti++) {
                 TestDef& t = sel[ti]; R.testName = t.name; R.st.clear(); R.done = 0; R.vbytes = 0; R.firstErrTest = -1; R.tTestStart = plat::now();
                 R.set_label(t.name);
@@ -1280,7 +1361,7 @@ static int run_suite(const Settings& s, Run& R) {
               R.stopReason.empty() ? "" : "  - ", R.stopReason.c_str());
         emitf("total coverage: %.1fx of the %.2f GiB tested region verified\n", (double)R.vtotal.load() / (double)total, total / 1073741824.0);
         if (!failedNames.empty()) { emitf("tests with errors:\n"); for (auto& n : failedNames) emitf("    %s\n", n.c_str()); }
-        if (R.total.lines) { emitf("first error: %.1f s into the run\nwhole run:\n", R.firstErrRun); emit_skew("    ", R.total, total); }
+        if (R.total.lines) { emitf("first error: %.1f s into the run   (run seed 0x%016llX)\nwhole run:\n", R.firstErrRun, (unsigned long long)runSeed); emit_skew("    ", R.total, total); }
         if (R.logf) { fclose(R.logf); R.logf = nullptr; }
         plat::release(R.region, total); R.region = nullptr;
         R.running = false;

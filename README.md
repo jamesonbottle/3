@@ -13,21 +13,26 @@ The window follows the familiar two-tab layout (Testing / Advanced) used by popu
 
 *Stop on error* is ticked by default, so the run ends at the first error; untick it to keep going and collect statistics (error counts per lane/beat/address bit). The console tool defaults to the opposite and reports its result in the exit code (0 = clean, 1 = errors found, 2 = bad option or option value / could not start, 3 = internal error; a typo such as `-mb abc` is rejected, not silently replaced by a default); with `--test-seconds N` it caps the timed tests, and when its output is piped it prints a progress line every 30 s instead of the live line.
 
+**Seed.** Every run picks a random seed and prints it first thing (`run seed: 0x... (random)`); it is also in the log header and repeated in the failure summary. The seed decides every random choice - hash data, random access orders, disturb traffic, page-shuffle patterns, pointer-chase layout - and each loop of a long run derives fresh ones from it, so a soak never repeats itself. To repeat a run, give the console tool `--seed 0x...` (decimal also works) with the same `-mb` and `-t`, which decide the data layout. A seed reproduces the data and access order, **not** thread timing or where the OS puts physical pages, so the timed tests (page shuffle, cache coherency) and marginal hardware can still behave differently from run to run.
+
 Advanced tab
 - **CPU cache**: Default (each test decides), Bypass (clflush every access so reads come from DRAM), Cached, Non-temporal (streaming stores).
 - **RNG**: generator used by the hash tests.
-- **Test set**: Full (27 tests) or Quick (the 11 tests marked quick). *This is an addition to the reference layout.*
+- **Test set**: Full (28 tests) or Quick (the 12 tests marked quick). *This is an addition to the reference layout.*
 - **Stress FPU**: AVX load on every thread - more power and heat, for testing marginal supply.
 
 ## What is tested
 
-27 tests (87 consolidated into 35 by turning near-duplicates into list sweeps, audited for usefulness and trimmed, plus 3 modelled on Google's stressapptest) built around how DDR5 behaves: BL16 64-byte bursts over two 32-bit subchannels, bank groups (tCCD_L/S, tRRD, tFAW), row open/close (tRCD/tRP/tRAS/tRC), bus turnaround (tWTR/tRTW), long idle gaps between write and verify (refresh keeps running during them, so this is an idle soak, not a retention-time test), DQ lane crosstalk and pattern-sensitivity styles, address-decode tests, pointer-chase latency stress, and read/write mixes. Read `suite.cfg` for the full list; each block has a name.
+28 tests (87 consolidated into 35 by turning near-duplicates into list sweeps, audited for usefulness and trimmed, plus 3 modelled on Google's stressapptest and 1 evolving-data test) built around how DDR5 behaves: BL16 64-byte bursts over two 32-bit subchannels, bank groups (tCCD_L/S, tRRD, tFAW), row open/close (tRCD/tRP/tRAS/tRC), bus turnaround (tWTR/tRTW), long idle gaps between write and verify (refresh keeps running during them, so this is an idle soak, not a retention-time test), DQ lane crosstalk and pattern-sensitivity styles, address-decode tests, pointer-chase latency stress, and read/write mixes. Read `suite.cfg` for the full list; each block has a name.
 
 Ideas taken from [stressapptest](https://github.com/stressapptest/stressapptest) (reimplemented from its public description, no code copied):
 - **Pattern table**: walking ones / inverse-alternating ones / zeros, 0/1, 5/A, 8b10b-style, "busy" patterns, each held for 1/2/4/8 words (32 to 256-bit bus-width repeat) and inverted too.
 - **Page shuffle**: all memory in 4 KB pages with random patterns; threads copy pages onto each other (verifying the source line by line), invert pages in place four times (up, down, down, up), refill and re-check them, mixing cache-hot and flushed accesses, then verify every page. Data keeps moving between cores and channels while staying predictable.
 - **Cache coherency**: threads share a few cache lines, each owning one byte; sums are checked after every round. This tests the cores' caches and fabric, not DRAM cells.
 - Closed-source testers' internals are not public, so nothing here is derived from them.
+
+Not from stressapptest:
+- **Evolving data**: every other data test writes a pattern once or rewrites identical data, so a write that never lands leaves exactly the bytes the test expects. Here each 64-byte line has its own update period (every 1 to 8 passes) and a new generation of hash data each time, so memory always holds a mix of generations. After every pass *every* line is checked against its exact expected generation: a rewritten line that still shows its previous data is a lost or misdirected write, and a line that was not rewritten but changed is a stray write or disturb. The expected data is computed from (line, generation, seed), nothing is stored on the side.
 
 ## Honest limits
 
@@ -43,7 +48,7 @@ Ideas taken from [stressapptest](https://github.com/stressapptest/stressapptest)
 tools/selftest.sh        # Linux, g++ 11+ with AVX2; takes a few minutes; exits non-zero on any failure
 ```
 
-It builds the engine twice (normal, and with `-DDDR5TEST_INJECT`, which plants known bit flips between write and verify), then checks that address orders are true permutations, that the rotating windows cover the whole region, that clean runs of 14 representative tests report nothing, that bad option values are rejected, that the coverage counter is exact on a tiny region, and that the injected faults are found exactly (42 lines / 44 bits in the pattern test, plus the page-shuffle and coherency injections) without hanging in stop-on-error mode. One more check stops the page shuffle in the middle of its fill phase and requires that only the planted flip is reported (pages that were never filled must not be verified). Every run is wrapped in `timeout` (default 120 s, `TMO=` to change), so a hang fails the self-test instead of stalling CI. It runs in CI on every push. It proves the detection logic; it cannot prove anything about a particular DIMM.
+It builds the engine twice (normal, and with `-DDDR5TEST_INJECT`, which plants known bit flips between write and verify), then checks that address orders are true permutations, that the rotating windows cover the whole region, that every hash mixer (splitmix, murmur, xorshift64*) avalanches, that one seed reproduces every random choice, that clean runs of 15 representative tests report nothing (each with a fresh random seed, which a failure prints so it can be repeated), that bad option values (including `--seed`) are rejected, that the coverage counter is exact on a tiny region, that the printed seed is accepted back and reproduces the data of a run, and that the injected faults are found exactly (42 lines / 44 bits in the pattern test, a lost write plus a stray bit flip in the evolving-data test, plus the page-shuffle and coherency injections) without hanging in stop-on-error mode. One more check stops the page shuffle in the middle of its fill phase and requires that only the planted flip is reported (pages that were never filled must not be verified). Every run is wrapped in `timeout` (default 120 s, `TMO=` to change), so a hang fails the self-test instead of stalling CI. It runs in CI on every push. It proves the detection logic; it cannot prove anything about a particular DIMM.
 
 ## Build
 
@@ -74,6 +79,6 @@ src/main_gui.cpp   Win32 GUI          src/main_cli.cpp   console front-end
 src/suite_data.h   generated from suite.cfg
 src/app.rc, app.manifest   visual styles + DPI awareness
 tools/gen_suite.py         suite.cfg -> suite_data.h
-tools/unit_tests.cpp       unit tests of orders / windows / generators / suite parsing
+tools/unit_tests.cpp       unit tests of orders / windows / generators / hash mixers / seeds / evolving data / suite parsing
 tools/selftest.sh          unit tests + clean runs + fault injection (see Self-test)
 ```

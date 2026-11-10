@@ -1,5 +1,6 @@
 // ddr5test CLI front-end (console). Same engine and built-in suite as the GUI; used for headless runs and for development on Linux.
 #include "engine.h"
+#include <cctype>
 #include <cerrno>
 #ifdef _WIN32
   #include <io.h>
@@ -11,6 +12,7 @@
 static void usage() {
     puts("ddr5test_cli [-mb MB] [-t threads] [-l loops] [-f name-filter] [--quick] [--coverage PCT] [--minutes N]\n"
          "             [--test-seconds N] [--cache default|bypass|cached|nt] [--rng default|splitmix|murmur|xorshift] [--fpu]\n"
+         "             [--seed N|0xHEX]   (each run picks a random seed and prints it; pass it back with the same -mb / -t to repeat the run)\n"
          "             [--keep-going | --stop-on-error] [--no-large-pages] [--log FILE] [--list]\n"
          "exit code: 0 = no errors, 1 = memory errors found, 2 = could not start (bad option / not enough memory), 3 = internal error");
 }
@@ -51,6 +53,16 @@ int main(int argc, char** argv) {
         else if (a == "--test-seconds") s.testSeconds = num(BIG);
         else if (a == "--cache") { int k = choice({"default", "bypass", "cached", "nt"}); if (k >= 0) s.cacheMode = k; }
         else if (a == "--rng") { int k = choice({"default", "splitmix", "murmur", "xorshift"}); if (k >= 0) s.rngMode = k; }
+        else if (a == "--seed") {   // any 64-bit value, decimal or 0x hex (the run prints its seed in exactly this form)
+            std::string v = nx();
+            if (!bad) {
+                bool hex = v.size() > 2 && v[0] == '0' && (v[1] == 'x' || v[1] == 'X'); const char* d = v.c_str() + (hex ? 2 : 0);
+                bool plain = *d && *d != '-' && *d != '+' && !isspace((unsigned char)*d);   // strtoull would silently accept a sign or leading blanks
+                char* e = nullptr; errno = 0; unsigned long long x = plain ? strtoull(d, &e, hex ? 16 : 10) : 0;
+                if (!plain || !e || *e || errno) { fprintf(stderr, "bad value '%s' for --seed (expected a 64-bit number, decimal or 0x hex)\n", v.c_str()); bad = true; }
+                else { s.seed = x; s.seedSet = true; }
+            }
+        }
         else if (a == "--fpu") s.stressFpu = true;
         else if (a == "--keep-going") s.stopOnError = false;
         else if (a == "--stop-on-error") s.stopOnError = true;
