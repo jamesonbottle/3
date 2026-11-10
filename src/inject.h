@@ -1,0 +1,29 @@
+// inject.h - fault-injection hooks for tools/selftest.sh.
+// The algorithms call DDR5_INJECT(hook, args...) at a few points between write and verify.
+// - Normal build: it expands to nothing (no code, no branch).
+// - Fault-injection engine (-DDDR5TEST_INJECT, library ddr5engine_inject): it calls ddr5::inject::<hook>. The bodies
+//   live in inject.cpp and plant known faults that the self-test must find.
+// Every thread reaches every hook; the bodies pick the thread that acts.
+#pragma once
+
+#ifdef DDR5TEST_INJECT
+#include "run.h"
+#include "types.h"
+#include <cstddef>
+
+namespace ddr5::inject {
+
+using StoreFn = void (*)(void*, const Line&); // IO<...>::store of the calling test
+
+void after_fill(Run& R, int tid, size_t ji, const View& w);
+void evolve_last_pass(Run& R, int tid, size_t ji, const View& w, u64 p, u64 passes, u64 seed, u64 maxp, StoreFn store);
+void pagemix_fill_stop(Run& R, int tid, u64 pg);
+void pagemix_flip(Run& R, int tid);
+void coherency_extra(u8* mem, int tid);
+
+} // namespace ddr5::inject
+
+#define DDR5_INJECT(hook, ...) ::ddr5::inject::hook(__VA_ARGS__)
+#else
+#define DDR5_INJECT(hook, ...) ((void)0)
+#endif

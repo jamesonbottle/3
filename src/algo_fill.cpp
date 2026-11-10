@@ -1,6 +1,7 @@
 // algo_fill.cpp - write -> [disturb] -> [dwell] -> verify xN.
 #include "algo.h"
 #include "gen.h"
+#include "inject.h"
 #include "lineio.h"
 #include "log.h"
 #include "order.h"
@@ -80,19 +81,7 @@ void algo_fill(Run& R, const Params& P) {
                 });
                 _mm_sfence();
                 R.sync();
-#ifdef DDR5TEST_INJECT // self-test only: corrupt memory between write and verify
-                if (tid == 0 && ji == 0) {
-                    u8* c = w.base + 640 * 64 + 20;
-                    c[0] ^= 0x05;
-                    c[1] ^= 0x10;
-                    w.base[900 * 64 + 4] ^= 0x80;
-                    for (int k = 0; k < 40; k++)
-                        w.base[(4096 + k) * 64 + 8] ^= 1;
-                    _mm_clflush(c);
-                    _mm_mfence();
-                }
-                R.sync();
-#endif
+                DDR5_INJECT(after_fill, R, tid, ji, w);
                 if (j.dmode >= 0) {
                     disturb_traffic(R, R.dview(tid, wl, base + ji), j.dmode, dpasses, 0xD157 + tid + ji + g_salt);
                     _mm_sfence();

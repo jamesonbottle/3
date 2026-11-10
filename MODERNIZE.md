@@ -43,7 +43,7 @@ Windows cannot be built in this environment. Windows-only files can be compile-c
 | M1 | Formatting + lint config (was point 5) | done |
 | M2 | Namespace `ddr5` (point 2) | done |
 | M3 | Generated `suite_data.h` cannot drift (point 8) | done |
-| M4 | Fault-injection hooks out of the algorithms (point 6) | todo |
+| M4 | Fault-injection hooks out of the algorithms (point 6) | done |
 | M5 | Remove global mutable state (point 1), sub-steps 5a-5c | todo |
 | M6 | Split up `Run` (point 3) | todo |
 | M7 | Typed, validated test parameters (point 4), sub-steps 7a-7j | todo |
@@ -91,9 +91,9 @@ Done when: editing `suite.cfg` without regenerating makes `tools/selftest.sh` fa
 
 Why: `#ifdef DDR5TEST_INJECT` blocks sit in the middle of `algo_fill/evolve/pagemix/coherency`.
 
-- [ ] Add `src/inject.h` with one macro per hook point, e.g. `DDR5_INJECT(after_fill, R, tid, ji, w)`. In a normal build it expands to nothing; with `DDR5TEST_INJECT` it calls `inject::after_fill(...)`. Hook points: fill (after first sync), evolve (last pass), pagemix (stop in fill, planted flip), coherency (extra increment).
-- [ ] Add `src/inject.cpp` holding the five injection bodies, moved verbatim from the algos. In CMake: compiled only into `ddr5engine_inject`.
-- [ ] The algos contain only the one-line hook calls, no `#ifdef`.
+- [x] Add `src/inject.h` with one macro per hook point, e.g. `DDR5_INJECT(after_fill, R, tid, ji, w)`. In a normal build it expands to nothing; with `DDR5TEST_INJECT` it calls `inject::after_fill(...)`. Hook points: fill (after first sync), evolve (last pass), pagemix (stop in fill, planted flip), coherency (extra increment).
+- [x] Add `src/inject.cpp` holding the five injection bodies, moved verbatim from the algos. In CMake: compiled only into `ddr5engine_inject`.
+- [x] The algos contain only the one-line hook calls, no `#ifdef`.
 
 Done when: `grep -rn DDR5TEST_INJECT src/` finds only `inject.h`, `inject.cpp` and (if kept) the CMake file; the normal build's object files for the four algos contain no injection code; the self-test injection counts are unchanged (42 lines / 44 bits, 2 evolve lines, pagemix, coherency); gate passes.
 
@@ -150,3 +150,4 @@ Done when: `ctest` runs both and passes; gate passes.
 - 2026-11-10 M1 done (commit "modernize M1: add .clang-format ..." + follow-up with blame-ignore, CI format check, tidy). Engine objects byte-identical before/after reformat; gate green. 
 - 2026-11-10 M2 done. Every project symbol in libddr5engine(.inject).a is in `ddr5::` (nm check, std/compiler symbols filtered); `plat` is now `ddr5::plat`; main_cli/main_gui/unit_tests use `using namespace ddr5;`. Macros (`CBAR`) stay global. Windows files compile for x86_64-windows-gnu. Gate green. Next: M3.
 - 2026-11-10 M3 done. `tools/gen_suite.py --check` (exit 1 on drift, default write unchanged and byte-identical) runs as the first check of selftest section 1, which needs `python3`. Gate green with 54 PASS lines (53 + the new check; the new minimum is 54), 0 FAIL, 0 build warnings. Verified: appending a line to `suite.cfg` without regenerating makes `tools/selftest.sh` exit 1 (FAIL on the new line). Next: M4.
+- 2026-11-10 M4 done. Five hooks (`after_fill`, `evolve_last_pass`, `pagemix_fill_stop`, `pagemix_flip`, `coherency_extra`) in `src/inject.h`/`inject.cpp`; the `R.sync()` that sat inside each `#ifdef` moved into its hook, so a normal build has no extra barrier. Evolve passes `&io::store` as a function pointer (injection build only). `inject.cpp` is only in `ddr5engine_inject` and `#error`s without `DDR5TEST_INJECT`. All 19 normal-build objects (`-O2 -mavx2 -std=c++20`) are byte-identical to before (sha256), no `inject` symbols in `libddr5engine.a`; `grep -rn DDR5TEST_INJECT src/` finds only `inject.h`/`inject.cpp`. Gate green: 54 PASS, 0 FAIL, injection counts unchanged (42 lines / 44 bits, 2 evolve lines, pagemix, coherency), `tools/format.sh --check` clean. Windows files not rebuilt (hooks are `((void)0)` there). Next: M5.

@@ -1,6 +1,7 @@
 // algo_pagemix.cpp - stressapptest-style page shuffle.
 #include "algo.h"
 #include "gen.h"
+#include "inject.h"
 #include "lineio.h"
 #include "log.h"
 #include "order.h"
@@ -136,11 +137,7 @@ void algo_pagemix(Run& R, const Params& P) {
             filled[pg] = 1;
             if (((pg / R.T + 1) & 0x3FF) == 0)
                 R.tick();
-#ifdef DDR5TEST_INJECT // self-test only: with DDR5TEST_STOP_IN_FILL set, stop in the middle of the fill phase (pages
-                       // after this point are never filled)
-            if (tid == 0 && pg >= 1000 && getenv("DDR5TEST_STOP_IN_FILL"))
-                R.stop = true;
-#endif
+            DDR5_INJECT(pagemix_fill_stop, R, tid, pg);
         }
         _mm_sfence();
         R.sync();
@@ -203,14 +200,7 @@ void algo_pagemix(Run& R, const Params& P) {
         }
         _mm_sfence();
         R.sync();
-#ifdef DDR5TEST_INJECT // self-test only
-        if (tid == 0) {
-            R.region[3 * 4096 + 100] ^= 0x04;
-            _mm_clflush(R.region + 3 * 4096 + 64);
-            _mm_mfence();
-        }
-        R.sync();
-#endif
+        DDR5_INJECT(pagemix_flip, R, tid);
         if (tid == 0)
             R.set_label("page shuffle: final verify of all pages");
         for (u64 pg = tid; pg < np; pg += R.T) {

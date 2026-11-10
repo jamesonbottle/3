@@ -82,6 +82,7 @@ src/gen.h/.cpp     data generators        src/lineio.h          64-byte store/lo
 src/run.h/.cpp     Run, walk, error report
 src/algo.h/.cpp    shared algo helpers + the ALGOS table;  src/algo_*.cpp  one file per test algorithm
 src/suite.h/.cpp   run_suite(), failure summary, FPU stress;  src/suite_data.h  generated from suite.cfg
+src/inject.h/.cpp  fault-injection hooks (DDR5_INJECT) for the self-test; inject.cpp is only in the injection engine
 src/main_gui.cpp   Win32 GUI              src/main_cli.cpp      console front-end
 src/app.rc, app.manifest   visual styles + DPI awareness
 CMakeLists.txt             engine static library (built twice: normal + fault injection), front-ends, unit tests

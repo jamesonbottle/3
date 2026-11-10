@@ -1,6 +1,7 @@
 // algo_coherency.cpp - stressapptest-style cache-coherency check (tests cores/fabric, not DRAM cells).
 #include "algo.h"
 #include "gen.h"
+#include "inject.h"
 #include "lineio.h"
 #include "log.h"
 #include "order.h"
@@ -50,15 +51,7 @@ void algo_coherency(Run& R, const Params& P) {
                         *c = (u8)(*c + 1);
                     }
                 }
-#ifdef DDR5TEST_INJECT // self-test only: one lost/extra increment
-                if (tid == 0) {
-                    static bool once = false;
-                    if (!once) {
-                        once = true;
-                        mem[0]++;
-                    }
-                }
-#endif
+                DDR5_INJECT(coherency_extra, mem, tid);
                 R.sync();
                 if (tid < nt) {
                     u64 sum = 0;

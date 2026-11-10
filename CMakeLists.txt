@@ -1,7 +1,7 @@
 # ddr5ramtest - DDR5 memory tester. C++20, AVX2.
 #
 #   ddr5engine          static library: everything under src/ except the two front-ends
-#   ddr5engine_inject   the same sources built with -DDDR5TEST_INJECT (fault injection for tools/selftest.sh; only algo_*.cpp look at it)
+#   ddr5engine_inject   the same sources built with -DDDR5TEST_INJECT (fault injection for tools/selftest.sh; the algo_*.cpp call DDR5_INJECT hooks, src/inject.cpp is compiled only here)
 #   ddr5test_cli        console front-end (all platforms)
 #   ddr5test_cli_inject console front-end linked against the fault-injection engine (self-test only)
 #   unit_tests          deterministic unit tests of the engine's pure logic (tools/unit_tests.cpp)
@@ -62,7 +62,7 @@ add_library(ddr5engine STATIC ${ENGINE_SOURCES})
 target_include_directories(ddr5engine PUBLIC src)
 target_link_libraries(ddr5engine PUBLIC ddr5_flags)
 
-add_library(ddr5engine_inject STATIC ${ENGINE_SOURCES})
+add_library(ddr5engine_inject STATIC ${ENGINE_SOURCES} src/inject.cpp)
 target_include_directories(ddr5engine_inject PUBLIC src)
 target_link_libraries(ddr5engine_inject PUBLIC ddr5_flags)
 target_compile_definitions(ddr5engine_inject PRIVATE DDR5TEST_INJECT)

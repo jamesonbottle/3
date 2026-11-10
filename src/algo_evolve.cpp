@@ -1,6 +1,7 @@
 // algo_evolve.cpp - data that changes from pass to pass (lost-write detector).
 #include "algo.h"
 #include "gen.h"
+#include "inject.h"
 #include "lineio.h"
 #include "log.h"
 #include "order.h"
@@ -73,31 +74,7 @@ void algo_evolve(Run& R, const Params& P) {
                     });
                     _mm_sfence();
                     R.sync();
-#ifdef DDR5TEST_INJECT // self-test only, last pass: (1) undo one rewrite = a lost write, (2) flip one bit in a line
-                       // that was not rewritten
-                    if (p == passes) {
-                        if (tid == 0 && ji == 0) {
-                            bool lost = false, flip = false;
-                            for (u64 i = 0; i < w.n && !(lost && flip); i++) {
-                                u64 g = w.g + i, per = evo_period(g, j.seed, maxp);
-                                u8* a = w.base + i * 64;
-                                if (!lost && p % per == 0) {
-                                    Line old;
-                                    evo_make(g, p / per - 1, j.seed, old);
-                                    io::store(a, old);
-                                    lost = true;
-                                } else if (!flip && p % per != 0) {
-                                    a[8] ^= 0x20;
-                                    _mm_clflush(a);
-                                    flip = true;
-                                }
-                            }
-                            _mm_sfence();
-                            _mm_mfence();
-                        }
-                        R.sync();
-                    }
-#endif
+                    DDR5_INJECT(evolve_last_pass, R, tid, ji, w, p, passes, j.seed, maxp, &io::store);
                     walk(R, ov, vo.rev, [&](u64 i) {
                         const u8* a = vw.base + i * 64;
                         u64 g = vw.g + i;
