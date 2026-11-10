@@ -1,4 +1,9 @@
 @echo off
+REM HANDOFF [TODO] build.bat (step 5) - call CMake instead of the two cl lines.
+REM Keep the contract: run from an x64 Native Tools prompt, outputs build\ddr5ramtest.exe and build\ddr5test_cli.exe (build.yml uploads exactly these).
+REM In CMake set RUNTIME_OUTPUT_DIRECTORY(_<CONFIG>) so the exes land in build\ whatever the generator/config. Keep /O2 /std:c++20 /arch:AVX2 /EHsc /utf-8 /DNDEBUG
+REM and /SUBSYSTEM:WINDOWS /MANIFEST:NO for the GUI + src\app.rc. Keep the REM line about `python tools\gen_suite.py`.
+REM Delete this block when done.
 REM Builds ddr5ramtest.exe (GUI) and ddr5test_cli.exe. Run from a "x64 Native Tools Command Prompt for VS".
 REM Optional: python tools\gen_suite.py   (only after editing suite.cfg)
 setlocal

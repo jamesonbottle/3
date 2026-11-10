@@ -1,3 +1,7 @@
+<!--
+HANDOFF [TODO] README.md (step 5): update ONLY the `Build` section (MinGW line + CMake) and the `Layout` section to the new src/ file list.
+Leave everything else alone. Do not add a plan or a long section. Delete this block when done.
+-->
 # DDR5 RAM Test
 
 A single-file Windows memory tester for DDR5 systems. One native Win32 executable, no installer, no runtime, **no config files** - the whole test suite is compiled in.

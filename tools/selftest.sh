@@ -1,4 +1,10 @@
 #!/usr/bin/env bash
+# HANDOFF [TODO] selftest.sh (step 5) - build through CMake instead of single g++ lines.
+# Replace the three compile lines in the `== build` section (the $CXX ... unit_tests / cli / cli_inject lines) with a CMake configure + build of the targets
+# unit_tests, ddr5test_cli and ddr5test_cli_inject (same sources, compiled with -DDDR5TEST_INJECT), then point $OUT/unit_tests, $OUT/cli, $OUT/cli_inject at them.
+# Drop the `grep -v "run_suite.*defined but not used"` filter: that warning only existed because everything was static in one header.
+# Everything from `== 1. unit tests` on stays untouched. CXX, OUT and TMO environment variables keep working. Keep -Wall -Wextra.
+# Delete this block when done.
 # Reproducible self-test of the engine on Linux (needs g++ 11+ and an AVX2 CPU). Usage: tools/selftest.sh
 #
 #  1. unit tests       address orders are permutations, windows cover the whole chunk, suite.cfg parses, every hash mixer avalanches,

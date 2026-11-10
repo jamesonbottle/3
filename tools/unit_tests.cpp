@@ -1,3 +1,9 @@
+// HANDOFF [TODO] unit_tests.cpp (step 5) - build against the split engine.
+// Replace `#include "engine.h"` with the headers it needs: types.h, params.h, seed.h, order.h, gen.h, run.h, algo.h, suite.h.
+// It relies on these being non-static and declared: Order, Run/View (view, dview, window_lines), Gen + sat_table, mix64/g_rng, salt_for/g_salt/fresh_seed,
+// evo_period/evo_make, parse_cfg_stream, suite_text, ALGOS, parse_march_variants.
+// Link it against the engine static lib (no suite_data.h include here: use suite_text()).
+// Delete this block when done.
 // Deterministic unit tests for the engine's pure logic (no memory is stressed). Build and run: tools/selftest.sh
 //   g++ -std=c++20 -O2 -mavx2 -pthread -Isrc tools/unit_tests.cpp -o unit_tests && ./unit_tests
 #include <cmath>
