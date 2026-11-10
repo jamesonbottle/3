@@ -4,7 +4,7 @@ Goal: make the engine easy to maintain **without changing what it does**. One sm
 each verified by the self-test, so work can stop after any step and be picked up by a different person or Claude session.
 
 Baseline: branch `modular-engine`, commit `a484feb` (engine.h split into translation units). `tools/selftest.sh` passed there with
-54 PASS / 0 FAIL, and the engine built with no warnings under `-Wall -Wextra`.
+53 check lines PASS (`grep -c "^  PASS"`), 0 FAIL, and the engine built with no warnings under `-Wall -Wextra`.
 
 ## How to resume (read this first)
 
@@ -20,7 +20,7 @@ Baseline: branch `modular-engine`, commit `a484feb` (engine.h split into transla
 ## Gate (every step must pass)
 
 ```
-tools/selftest.sh                       # ~4 min, 2+ CPUs, g++ 11+ with AVX2. Must end with SELFTEST PASSED, 0 FAIL, PASS count not lower than before (54 at baseline)
+tools/selftest.sh                       # ~4 min, 2+ CPUs, g++ 11+ with AVX2. Must end with SELFTEST PASSED, 0 FAIL, `grep -c "^  PASS"` of its output not lower than before (53 at baseline; the final "SELFTEST PASSED" line is not counted)
 grep -ciE "warning|error" "$OUT/build.log"   # selftest already fails on this; the engine must stay warning-free
 ```
 
