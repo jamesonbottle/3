@@ -168,7 +168,7 @@ int run_suite(const Settings& s, Run& R) {
         int failedTests = 0;
         std::vector<std::string> failedNames;
         for (u64 loop = 1; (!cfg.loops || loop <= cfg.loops) && !R.stop; loop++) {
-            g_salt = salt_for(runSeed, loop); // each loop gets fresh seeds/permutations, all derived from the run seed
+            R.salt = salt_for(runSeed, loop); // each loop gets fresh seeds/permutations, all derived from the run seed
             for (size_t ti = 0; ti < sel.size() && !R.stop; ti++) {
                 TestDef& t = sel[ti];
                 R.testName = t.name;

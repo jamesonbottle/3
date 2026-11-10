@@ -16,7 +16,7 @@ namespace ddr5 {
 // ------------------------------------------------------------------ algo: fill (write -> [disturb] -> [dwell] ->
 // verify xN)
 void algo_fill(Run& R, const Params& P) {
-    auto vars = build_vars(P, R.log);
+    auto vars = build_vars(P, R.salt, R.log);
     OrderSpec wo = ospec(P, "order", "seq", R.log), vo = ospec(P, "verify_order", P.str("order", "seq").c_str(), R.log);
     bool strided = wo.k == Order::STRIDE || vo.k == Order::STRIDE;
     auto strides = stride_list(P, strided);
@@ -69,8 +69,8 @@ void algo_fill(Run& R, const Params& P) {
                 R.set_label(j.label);
             View w = R.view(tid, wl, base + ji), vw = R.view(cross ? (tid + 1) % R.T : tid, wl, base + ji);
             Order ow, ov;
-            ow.init(wo.k, w.n, j.stride, 1 + ji);
-            ov.init(vo.k, vw.n, j.stride, 77 + ji);
+            ow.init(wo.k, w.n, j.stride, 1 + ji, R.salt);
+            ov.init(vo.k, vw.n, j.stride, 77 + ji, R.salt);
             dispatch(width, nt, fl, [&](auto Wc, auto NTc, auto FLc) {
                 using io = IO<decltype(Wc)::value, decltype(NTc)::value, decltype(FLc)::value>;
                 walk(R, ow, wo.rev, [&](u64 i) {
@@ -83,7 +83,7 @@ void algo_fill(Run& R, const Params& P) {
                 R.sync();
                 DDR5_INJECT(after_fill, R, tid, ji, w);
                 if (j.dmode >= 0) {
-                    disturb_traffic(R, R.dview(tid, wl, base + ji), j.dmode, dpasses, 0xD157 + tid + ji + g_salt);
+                    disturb_traffic(R, R.dview(tid, wl, base + ji), j.dmode, dpasses, 0xD157 + tid + ji + R.salt);
                     _mm_sfence();
                     R.sync();
                 }

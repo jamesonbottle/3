@@ -73,6 +73,6 @@ struct Var {
     Gen g;
 };
 
-std::vector<Var> build_vars(const Params& P, const Logger& log);
+std::vector<Var> build_vars(const Params& P, u64 salt, const Logger& log); // salt: Run::salt
 
 } // namespace ddr5

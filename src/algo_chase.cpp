@@ -32,8 +32,8 @@ void algo_chase(Run& R, const Params& P) {
                     R.set_label("chase seed " + std::to_string(sd) + " mlp=" + std::to_string(K));
                 View w = R.view(tid, wl, base + sd * mlps.size() + mi);
                 Order o;
-                u64 seed = splitmix(sd * 31 + tid + g_salt + mi * 977), salt = splitmix(seed ^ 0x5A5A);
-                o.init(Order::RANDOM, w.n, 1, seed);
+                u64 seed = splitmix(sd * 31 + tid + R.salt + mi * 977), salt = splitmix(seed ^ 0x5A5A);
+                o.init(Order::RANDOM, w.n, 1, seed, R.salt);
                 using io = IO<32, 0, 1>;
                 auto make = [&](u64 idx, u64 next, Line& l) {
                     l.w[0] = next;

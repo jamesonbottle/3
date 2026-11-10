@@ -81,7 +81,7 @@ std::vector<MVar> parse_march_variants(const std::string& str, const Logger& log
     return out;
 }
 void algo_march(Run& R, const Params& P) {
-    auto vars = build_vars(P, R.log);
+    auto vars = build_vars(P, R.salt, R.log);
     auto mvs = parse_march_variants(P.str("march"), R.log);
     if (mvs.empty()) {
         R.log.emitf("march: no elements\n");
@@ -154,7 +154,7 @@ void algo_march(Run& R, const Params& P) {
                 R.set_label(j.label);
             View w = R.view(tid, wl, base + ji);
             Order o;
-            o.init(j.os.k, w.n, j.stride, 5 + ji);
+            o.init(j.os.k, w.n, j.stride, 5 + ji, R.salt);
             dispatch(width, nt, fl, [&](auto Wc, auto NTc, auto FLc) {
                 using io = IO<decltype(Wc)::value, decltype(NTc)::value, decltype(FLc)::value>;
                 for (size_t ei = 0; ei < els.size(); ei++) {
@@ -169,7 +169,7 @@ void algo_march(Run& R, const Params& P) {
                     if (e.dist) {
                         if (distOk)
                             disturb_traffic(R, R.dview(tid, wl, base + ji), e.dmode, e.dpasses,
-                                            0xD157 + tid * 31 + ji * 7 + ei + g_salt);
+                                            0xD157 + tid * 31 + ji * 7 + ei + R.salt);
                         _mm_sfence();
                         R.sync();
                         continue;

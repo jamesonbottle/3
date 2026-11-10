@@ -5,10 +5,9 @@
 namespace ddr5 {
 
 // Every random choice in the engine (order permutations, hash/addr seeds, disturb traffic, page shuffle, chase layout,
-// coherency) is a pure function of g_salt, and g_salt is a pure function of the run seed and the loop number. So one
-// printed number reproduces a whole run (given the same memory size and thread count, which decide the data layout; the
-// timed tests also depend on thread timing).
-extern u64 g_salt;
+// coherency) is a pure function of Run::salt, and the salt is a pure function of the run seed and the loop number. So
+// one printed number reproduces a whole run (given the same memory size and thread count, which decide the data layout;
+// the timed tests also depend on thread timing).
 u64 salt_for(u64 runSeed, u64 loop); // differs per loop: a long soak never repeats itself
 u64 fresh_seed();                    // random_device alone can be deterministic on old MinGW, so the clock is mixed in
 

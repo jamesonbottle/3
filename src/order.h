@@ -13,7 +13,7 @@ struct Order {
     int bits = 0, h = 0;
     u64 fk[4] = {};
     static bool parse(const std::string& s, K& k, bool& rev);
-    void init(K kk, u64 nn, u64 stride, u64 seed);
+    void init(K kk, u64 nn, u64 stride, u64 seed, u64 salt); // salt: Run::salt
     inline u64 fe(u64 x) const {
         u64 mask = (1ull << h) - 1, L = x >> h, R = x & mask;
         for (int r = 0; r < 4; r++) {

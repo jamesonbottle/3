@@ -122,7 +122,7 @@ void algo_pagemix(Run& R, const Params& P) {
         return g;
     };
     R.parallel([&](int tid) {
-        u64 rng = splitmix(0x5A7 + tid * 7919 + g_salt);
+        u64 rng = splitmix(0x5A7 + tid * 7919 + R.salt);
         auto nx = [&] {
             rng = splitmix(rng);
             return rng;

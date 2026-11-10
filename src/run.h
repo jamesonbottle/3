@@ -53,6 +53,8 @@ struct Run {
     const Logger& log; // where output goes; owned by the front-end, must outlive the Run
     explicit Run(const Logger& l) : log(l) {}
     Cfg cfg;
+    u64 salt = 0; // from the run seed and the loop number (run_suite sets it per loop): every random choice is a
+                  // function of it
     int T = 1;
     std::vector<Chunk> chunks;
     std::atomic<bool> stop{false};

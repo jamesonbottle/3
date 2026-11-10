@@ -25,7 +25,7 @@ namespace ddr5 {
 // Memory therefore holds a mix of generations at all times, and old data must survive while its neighbours are being
 // rewritten.
 void algo_evolve(Run& R, const Params& P) {
-    auto vars = build_vars(P, R.log); // data = hash: one variant per seed (seeds = N)
+    auto vars = build_vars(P, R.salt, R.log); // data = hash: one variant per seed (seeds = N)
     OrderSpec wo = ospec(P, "order", "random", R.log), vo = ospec(P, "verify_order", "seq", R.log);
     auto strides = stride_list(P, wo.k == Order::STRIDE || vo.k == Order::STRIDE);
     int width = (int)P.num("width", 32);
@@ -52,8 +52,8 @@ void algo_evolve(Run& R, const Params& P) {
                 R.set_label(j.label);
             View w = R.view(tid, wl, base + ji), vw = R.view(cross ? (tid + 1) % R.T : tid, wl, base + ji);
             Order ow, ov;
-            ow.init(wo.k, w.n, j.stride, 21 + ji);
-            ov.init(vo.k, vw.n, j.stride, 55 + ji);
+            ow.init(wo.k, w.n, j.stride, 21 + ji, R.salt);
+            ov.init(vo.k, vw.n, j.stride, 55 + ji, R.salt);
             dispatch(width, nt, fl, [&](auto Wc, auto NTc, auto FLc) {
                 using io = IO<decltype(Wc)::value, decltype(NTc)::value, decltype(FLc)::value>;
                 walk(R, ow, wo.rev, [&](u64 i) {

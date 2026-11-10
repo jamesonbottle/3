@@ -28,7 +28,7 @@ bool Order::parse(const std::string& s, K& k, bool& rev) {
         return false;
     return true;
 }
-void Order::init(K kk, u64 nn, u64 stride, u64 seed) {
+void Order::init(K kk, u64 nn, u64 stride, u64 seed, u64 salt) {
     k = kk;
     n = nn;
     m = nn;
@@ -45,7 +45,7 @@ void Order::init(K kk, u64 nn, u64 stride, u64 seed) {
             bits++;
         h = bits / 2;
         for (int i = 0; i < 4; i++)
-            fk[i] = splitmix(seed + g_salt * 7919 + 0x1234 * (i + 1));
+            fk[i] = splitmix(seed + salt * 7919 + 0x1234 * (i + 1));
         break;
     case BITREV:
     case GRAY:

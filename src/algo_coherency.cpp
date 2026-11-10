@@ -38,7 +38,7 @@ void algo_coherency(Run& R, const Params& P) {
                 fin = false;
             }
             double end = plat::now() + secs;
-            u32 x = (u32)(splitmix(tid + 1 + g_salt + L * 977) | 1);
+            u32 x = (u32)(splitmix(tid + 1 + R.salt + L * 977) | 1);
             R.sync();
             for (;;) {
                 if (tid < nt) {

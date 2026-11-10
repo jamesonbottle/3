@@ -15,7 +15,7 @@ namespace ddr5 {
 // ------------------------------------------------------------------ algo: hammer (n-sided row hammer / activation-rate
 // stress)
 void algo_hammer(Run& R, const Params& P) {
-    auto vars = build_vars(P, R.log);
+    auto vars = build_vars(P, R.salt, R.log);
     auto strides = P.nums("rowstride", "256K 1M");
     auto sides = P.nums("aggressors", "2 9");
     u64 acts = P.num("acts", 400000), rounds = P.num("rounds", 24), wl = R.window_lines(P);
@@ -34,7 +34,7 @@ void algo_hammer(Run& R, const Params& P) {
     u64 base = R.winctr[R.testName];
     R.winctr[R.testName] += jobs.size();
     R.parallel([&](int tid) {
-        u64 rng = splitmix(0xABCD + tid * 7919 + g_salt);
+        u64 rng = splitmix(0xABCD + tid * 7919 + R.salt);
         for (size_t ji = 0; ji < jobs.size(); ji++) {
             if (R.stop)
                 break;

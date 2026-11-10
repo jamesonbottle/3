@@ -157,7 +157,7 @@ static void expand_style(const std::string& st, const Params& P, std::vector<std
         log.emitf("unknown style '%s'\n", st.c_str());
 }
 
-std::vector<Var> build_vars(const Params& P, const Logger& log) {
+std::vector<Var> build_vars(const Params& P, u64 salt, const Logger& log) {
     std::vector<Var> out;
     std::string data = lower(P.str("data", "pattern"));
     u64 seed = P.num("seed", 0);
@@ -182,7 +182,7 @@ std::vector<Var> build_vars(const Params& P, const Logger& log) {
         for (u64 i = 0; i < ns; i++) {
             Var v;
             v.g.kind = data == "hash" ? 1 : 2;
-            v.g.seed = (i || g_salt) ? splitmix(seed + i + g_salt) : seed;
+            v.g.seed = (i || salt) ? splitmix(seed + i + salt) : seed;
             v.label = data + " seed=" + std::to_string(i);
             out.push_back(v);
         }

@@ -44,7 +44,7 @@ static void test_orders() {
                     if (kd.k != Order::STRIDE && stride != 1)
                         continue;
                     Order o;
-                    o.init(kd.k, n, stride, 12345);
+                    o.init(kd.k, n, stride, 12345, 0);
                     std::vector<u8> seen(n, 0);
                     u64 dup = 0, oob = 0;
                     for (u64 q = 0; q < n; q++) {
@@ -180,12 +180,12 @@ static void test_seed() {
         std::vector<u64> hash, perm;
     };
     auto sig = [&](u64 seed, u64 loop) {
-        g_salt = salt_for(seed, loop);
+        u64 salt = salt_for(seed, loop);
         Sig s;
-        for (auto& v : build_vars(p, test_log))
+        for (auto& v : build_vars(p, salt, test_log))
             s.hash.push_back(v.g.seed);
         Order o;
-        o.init(Order::RANDOM, 5000, 1, 1);
+        o.init(Order::RANDOM, 5000, 1, 1, salt);
         for (u64 i = 0; i < 64; i++)
             s.perm.push_back(o.at(i));
         return s;
@@ -199,7 +199,6 @@ static void test_seed() {
           "a different loop must change the hash seeds and the random permutation");
     CHECK(std::set<u64>(a.hash.begin(), a.hash.end()).size() == a.hash.size(),
           "the seeds of one run must differ from each other");
-    g_salt = 0;
 }
 
 // Evolving data: generation rules and the property that makes a lost write visible (the old generation never equals the
@@ -269,7 +268,7 @@ static void test_suite_parses() {
         CHECK(ALGOS.count(algo) == 1, "test '%s': unknown algo '%s'", t.name.c_str(), algo.c_str());
         if (algo == "fill" || algo == "march" || algo == "rwstorm" || algo == "evolve" || algo == "copy" ||
             algo == "chase")
-            CHECK(!build_vars(t.p, test_log).empty(), "test '%s': no data variants (typo in data/style/pattern?)",
+            CHECK(!build_vars(t.p, 0, test_log).empty(), "test '%s': no data variants (typo in data/style/pattern?)",
                   t.name.c_str());
         if (algo == "march")
             CHECK(!parse_march_variants(t.p.str("march"), test_log).empty(), "test '%s': march parses to nothing",

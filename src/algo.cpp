@@ -31,7 +31,7 @@ std::vector<u64> stride_list(const Params& P, bool needed) {
 static volatile u64 g_sink = 0;
 void disturb_traffic(Run& R, const View& d, int mode, u64 passes, u64 seed) {
     Order o;
-    o.init(Order::RANDOM, d.n, 1, seed);
+    o.init(Order::RANDOM, d.n, 1, seed, R.salt);
     for (u64 p = 0; p < passes && !R.stop; p++)
         walk(R, o, false, [&](u64 i) {
             u8* a = d.base + i * 64;

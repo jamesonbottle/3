@@ -5,7 +5,6 @@
 
 namespace ddr5 {
 
-u64 g_salt = 0;
 int g_rng = 0;
 // Differs per loop: a long soak never repeats itself.
 u64 salt_for(u64 runSeed, u64 loop) {
