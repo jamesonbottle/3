@@ -1,6 +1,13 @@
 name: build
 on: [push, pull_request, workflow_dispatch]
 jobs:
+  linux-selftest:
+    # Proves the detection logic without DDR5 hardware: unit tests, clean runs (no false positives) and a fault-injection build (planted flips are found).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Engine self-test
+        run: bash tools/selftest.sh
   windows:
     runs-on: windows-latest
     steps:

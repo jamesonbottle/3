@@ -40,6 +40,7 @@ struct App {
     double endT = 0; u64 lastErr = 0; bool stopRequested = false;
     bool mbAuto = true, setting = true;   // mbAuto: Megabytes follows free RAM and thread count until the user types a value
     std::mutex logMu; FILE* log = nullptr; std::string lastLine;
+    int logWhere = 0;   // 0 = next to the exe, 1 = %TEMP% (exe folder not writable), 2 = no log file could be opened
     std::unordered_map<HWND, std::wstring> shown;   // last text per control, to avoid flicker
     u64 totalMB = 0;
 } A;
@@ -133,7 +134,12 @@ void start_run() {
 
     {   // everything the engine reports goes to the log file next to the exe
         std::lock_guard<std::mutex> l(A.logMu);
-        A.log = _wfopen(exe_dir_file(L"ddr5ramtest.log").c_str(), L"a"); A.lastLine.clear();
+        A.log = _wfopen(exe_dir_file(L"ddr5ramtest.log").c_str(), L"a"); A.lastLine.clear(); A.logWhere = 0;
+        if (!A.log) {   // exe folder not writable (e.g. Program Files): fall back to the temp folder rather than losing the error details
+            wchar_t tp[MAX_PATH + 1]; DWORD n = GetTempPathW(MAX_PATH, tp);
+            if (n && n <= MAX_PATH) { A.log = _wfopen((std::wstring(tp, n) + L"ddr5ramtest.log").c_str(), L"a"); A.logWhere = 1; }
+            if (!A.log) A.logWhere = 2;
+        }
         if (A.log) {
             SYSTEMTIME st; GetLocalTime(&st);
             fprintf(A.log, "---- DDR5 RAM Test run %04d-%02d-%02d %02d:%02d:%02d  %llu MB, %d threads, cache=%d rng=%d set=%d fpu=%d stop-on-error=%d ----\n", st.wYear, st.wMonth, st.wDay,
@@ -165,7 +171,9 @@ void on_run_done(int rc) {
     A.endT = plat::now(); A.busy = false;
     std::string last; { std::lock_guard<std::mutex> l(A.logMu); last = A.lastLine; if (A.log) { fclose(A.log); A.log = nullptr; } }
     set_running_ui(false); refresh();
-    if (A.run && A.run->errTotal.load() > 0) setText(A.hTest, A.stopRequested ? L"Stopped (errors found)" : L"Errors found - see ddr5ramtest.log");
+    if (A.run && A.run->errTotal.load() > 0)
+        setText(A.hTest, A.stopRequested ? L"Stopped (errors found)" : A.logWhere == 0 ? L"Errors found - see ddr5ramtest.log" :
+                         A.logWhere == 1 ? L"Errors found - log is in %TEMP%" : L"Errors found (no log file could be written)");
     else if (A.stopRequested) setText(A.hTest, L"Stopped");
     if (rc >= 2) {
         setText(A.hTest, L"Could not run");
@@ -247,9 +255,9 @@ void build_ui() {
 }
 
 void apply_caption_style(HWND h) {   // dark red caption like the reference window (Windows 11 only; silently ignored elsewhere)
-    HMODULE dwm = LoadLibraryW(L"dwmapi.dll"); if (!dwm) return;
+    HMODULE dwm = LoadLibraryExW(L"dwmapi.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32); if (!dwm) return;   // System32 only: no DLL search-order hijack
     using Fn = HRESULT(WINAPI*)(HWND, DWORD, LPCVOID, DWORD);
-    Fn f = (Fn)GetProcAddress(dwm, "DwmSetWindowAttribute");
+    Fn f = (Fn)(void*)GetProcAddress(dwm, "DwmSetWindowAttribute");
     if (f) {
         COLORREF cap = RGB(128, 0, 0), txt = RGB(255, 255, 255), brd = RGB(128, 0, 0);
         f(h, 35, &cap, sizeof cap); f(h, 36, &txt, sizeof txt); f(h, 34, &brd, sizeof brd);
