@@ -1,7 +1,3 @@
-<!--
-HANDOFF [TODO] README.md (step 5): update ONLY the `Build` section (MinGW line + CMake) and the `Layout` section to the new src/ file list.
-Leave everything else alone. Do not add a plan or a long section. Delete this block when done.
--->
 # DDR5 RAM Test
 
 A single-file Windows memory tester for DDR5 systems. One native Win32 executable, no installer, no runtime, **no config files** - the whole test suite is compiled in.
@@ -56,17 +52,17 @@ It builds the engine twice (normal, and with `-DDDR5TEST_INJECT`, which plants k
 
 ## Build
 
-Needs MSVC (Visual Studio Build Tools) - run in an *x64 Native Tools* prompt:
+The engine is ordinary C++20 split into translation units under `src/`, built with CMake (3.20+). With MSVC (Visual Studio Build Tools) run in an *x64 Native Tools* prompt:
 
 ```
 build.bat
 ```
 
-Output in `build\`: `ddr5ramtest.exe` (GUI) and `ddr5test_cli.exe` (same engine, console, for headless runs: `ddr5test_cli --help`). MinGW also works:
+Output in `build\`: `ddr5ramtest.exe` (GUI) and `ddr5test_cli.exe` (same engine, console, for headless runs: `ddr5test_cli --help`). MinGW and Linux (console tool only) use CMake directly:
 
 ```
-windres src/app.rc -O coff -o app.res.o
-g++ -std=c++20 -O2 -mavx2 -mwindows -static -pthread -Isrc src/main_gui.cpp app.res.o -o ddr5ramtest.exe -lcomctl32 -lgdi32 -luser32 -ladvapi32
+cmake -S . -B build/cmake -G Ninja            # MinGW: add -DCMAKE_CXX_COMPILER=g++ ; the GUI target exists on Windows only
+cmake --build build/cmake                     # executables are placed in build/
 ```
 
 GitHub Actions builds both on `windows-latest` and uploads them as artifacts.
@@ -78,10 +74,17 @@ Edit `suite.cfg` (format documented at the top), run `python tools/gen_suite.py`
 ## Layout
 
 ```
-src/engine.h       test engine (header-only)
-src/main_gui.cpp   Win32 GUI          src/main_cli.cpp   console front-end
-src/suite_data.h   generated from suite.cfg
+src/types.h        u8..u64, the 64-byte Line, bit helpers
+src/platform.h     OS layer (plat::)      src/platform_win.cpp  src/platform_posix.cpp
+src/log.h/.cpp     output sink            src/params.h/.cpp     string helpers, Params, suite.cfg parser
+src/seed.h/.cpp    run seed, hash mixer   src/order.h/.cpp      address orders
+src/gen.h/.cpp     data generators        src/lineio.h          64-byte store/load/verify (templates)
+src/run.h/.cpp     Run, walk, error report
+src/algo.h/.cpp    shared algo helpers + the ALGOS table;  src/algo_*.cpp  one file per test algorithm
+src/suite.h/.cpp   run_suite(), failure summary, FPU stress;  src/suite_data.h  generated from suite.cfg
+src/main_gui.cpp   Win32 GUI              src/main_cli.cpp      console front-end
 src/app.rc, app.manifest   visual styles + DPI awareness
+CMakeLists.txt             engine static library (built twice: normal + fault injection), front-ends, unit tests
 tools/gen_suite.py         suite.cfg -> suite_data.h
 tools/unit_tests.cpp       unit tests of orders / windows / generators / hash mixers / seeds / evolving data / suite parsing
 tools/selftest.sh          unit tests + clean runs + fault injection (see Self-test)

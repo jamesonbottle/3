@@ -1,10 +1,4 @@
 #!/usr/bin/env bash
-# HANDOFF [TODO] selftest.sh (step 5) - build through CMake instead of single g++ lines.
-# Replace the three compile lines in the `== build` section (the $CXX ... unit_tests / cli / cli_inject lines) with a CMake configure + build of the targets
-# unit_tests, ddr5test_cli and ddr5test_cli_inject (same sources, compiled with -DDDR5TEST_INJECT), then point $OUT/unit_tests, $OUT/cli, $OUT/cli_inject at them.
-# Drop the `grep -v "run_suite.*defined but not used"` filter: that warning only existed because everything was static in one header.
-# Everything from `== 1. unit tests` on stays untouched. CXX, OUT and TMO environment variables keep working. Keep -Wall -Wextra.
-# Delete this block when done.
 # Reproducible self-test of the engine on Linux (needs g++ 11+ and an AVX2 CPU). Usage: tools/selftest.sh
 #
 #  1. unit tests       address orders are permutations, windows cover the whole chunk, suite.cfg parses, every hash mixer avalanches,
@@ -20,7 +14,6 @@ cd "$(dirname "$0")/.."
 CXX=${CXX:-g++}
 OUT=${OUT:-$(mktemp -d)}
 mkdir -p "$OUT"
-FLAGS="-std=c++20 -O2 -mavx2 -pthread -Wall -Wextra -Isrc"
 RUN="-mb 64 -t 2 --no-large-pages --test-seconds 3"
 TMO=${TMO:-120}   # every run of the tester is wrapped in timeout: a hang must fail the self-test (exit code 124), not stall CI
 fail=0
@@ -28,10 +21,12 @@ ok()   { printf '  PASS  %s\n' "$1"; }
 bad()  { printf '  FAIL  %s\n' "$1"; fail=1; }
 check() { if eval "$2"; then ok "$1"; else bad "$1"; fi; }
 
-echo "== build ($CXX) -> $OUT"
-$CXX $FLAGS tools/unit_tests.cpp -o "$OUT/unit_tests" 2>&1 | grep -v "run_suite.*defined but not used" | grep -E "error|warning" && fail=1
-$CXX $FLAGS src/main_cli.cpp -o "$OUT/cli" || exit 2
-$CXX $FLAGS -DDDR5TEST_INJECT src/main_cli.cpp -o "$OUT/cli_inject" || exit 2
+echo "== build ($CXX, CMake) -> $OUT"
+# unit_tests, ddr5test_cli (normal engine) and ddr5test_cli_inject (same sources compiled with -DDDR5TEST_INJECT), built by CMake with -Wall -Wextra.
+cmake -S . -B "$OUT/cmake" -DCMAKE_CXX_COMPILER="$CXX" -DDDR5_OUTPUT_DIR="$OUT" > "$OUT/cmake.log" 2>&1 || { cat "$OUT/cmake.log"; exit 2; }
+cmake --build "$OUT/cmake" --target unit_tests ddr5test_cli ddr5test_cli_inject -j "$(nproc 2>/dev/null || echo 2)" > "$OUT/build.log" 2>&1 || { cat "$OUT/build.log"; exit 2; }
+grep -E "error|warning" "$OUT/build.log" && fail=1
+mv -f "$OUT/ddr5test_cli" "$OUT/cli"; mv -f "$OUT/ddr5test_cli_inject" "$OUT/cli_inject"
 
 echo "== 1. unit tests"
 check "orders, windows, generators, suite parsing" 'timeout $TMO "$OUT/unit_tests" > "$OUT/unit.out" 2>&1 || { cat "$OUT/unit.out"; false; }'

@@ -1,28 +1,101 @@
-# HANDOFF [TODO] CMakeLists.txt - READ FIRST, this is the coordination point for splitting src/engine.h.
+# ddr5ramtest - DDR5 memory tester. C++20, AVX2.
 #
-# Goal: turn the 1372-line header-only src/engine.h into normal C++20 translation units. NO behaviour change.
-#  - Pure move: no logic edits, no renames, no reformatting beyond what the move needs. Real fixes go in a separate commit.
-#  - Do NOT edit src/engine.h. Every "engine.h N-M" in a HANDOFF block means `git show 73ef2e6:src/engine.h` lines N-M.
-#  - The old build (build.bat, tools/selftest.sh, main_*.cpp including engine.h) keeps working until step 5.
-#  - Remaining work: grep -rl "HANDOFF \[TODO\]" .     When a file is finished, delete its block.
-#  - Syntax-check without a build system:
-#        header: echo '#include "X.h"' | g++ -std=c++20 -mavx2 -fsyntax-only -x c++ - -Isrc
-#        source: g++ -std=c++20 -mavx2 -pthread -fsyntax-only -Isrc src/X.cpp
-# Rules for every file
-#  - `static` -> external linkage + declaration in the header. Per-line hot code stays inline in headers:
-#    Order::at/pos, Gen::make, IO<>/dispatch, walk, mix64, Run::vtick. Run::parallel is a template, so it lives in run.h.
-#  - Globals: g_salt, g_rng (seed.cpp); g_emit, g_console, g_tty (log.cpp). Declared `extern` in the matching header.
-#  - Only platform_win.cpp and main_gui.cpp include <windows.h>.
-#  - Names stay as they are (plat::, Run, Order, Gen, ...). No new namespaces.
-# Order of work (steps depend on the ones before; files inside one step are independent)
-#  1  types.h  platform.h  platform_win.cpp  platform_posix.cpp  log.h/.cpp  params.h/.cpp  seed.h/.cpp
-#  2  order.h/.cpp  gen.h/.cpp  lineio.h
-#  3  run.h/.cpp  algo.h/.cpp
-#  4  algo_*.cpp (10 files)  suite.h/.cpp
-#  5  this file, main_cli.cpp, main_gui.cpp, tools/unit_tests.cpp, tools/selftest.sh, build.bat, README.md (Build + Layout only); then delete src/engine.h
-# Step 5 target: engine sources -> one static lib, built twice (normal + -DDDR5TEST_INJECT, see algo_fill.cpp);
-#  exes ddr5ramtest (GUI, Windows only) and ddr5test_cli, plus unit_tests; C++20, AVX2 (-mavx2 / /arch:AVX2), pthread on POSIX.
-# Done = tools/selftest.sh passes with today's exact counts (42 lines / 44 bits, ...) and the Windows CI job builds both exes.
+#   ddr5engine          static library: everything under src/ except the two front-ends
+#   ddr5engine_inject   the same sources built with -DDDR5TEST_INJECT (fault injection for tools/selftest.sh; only algo_*.cpp look at it)
+#   ddr5test_cli        console front-end (all platforms)
+#   ddr5test_cli_inject console front-end linked against the fault-injection engine (self-test only)
+#   unit_tests          deterministic unit tests of the engine's pure logic (tools/unit_tests.cpp)
+#   ddr5ramtest         Win32 GUI front-end (Windows only)
+#
+# Executables land in DDR5_OUTPUT_DIR (default <source>/build/) whatever the generator or configuration, which is where build.bat and CI expect them.
 cmake_minimum_required(VERSION 3.20)
 project(ddr5ramtest CXX)
-message(FATAL_ERROR "CMakeLists.txt is a handoff stub: implement step 5 per the HANDOFF block above.")
+
+set(DDR5_OUTPUT_DIR "${CMAKE_SOURCE_DIR}/build" CACHE PATH "Where the executables are placed")
+
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+  set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+endif()
+
+# One place for the compiler flags every target shares (engine, front-ends, tests).
+add_library(ddr5_flags INTERFACE)
+if(MSVC)
+  target_compile_options(ddr5_flags INTERFACE /O2 /arch:AVX2 /EHsc /utf-8)
+  target_compile_definitions(ddr5_flags INTERFACE NDEBUG)
+else()
+  target_compile_options(ddr5_flags INTERFACE -O2 -mavx2 -Wall -Wextra)
+  set(THREADS_PREFER_PTHREAD_FLAG ON)
+  find_package(Threads REQUIRED)
+  target_link_libraries(ddr5_flags INTERFACE Threads::Threads)
+endif()
+
+set(ENGINE_SOURCES
+  src/algo.cpp
+  src/algo_chase.cpp
+  src/algo_coherency.cpp
+  src/algo_copy.cpp
+  src/algo_evolve.cpp
+  src/algo_fill.cpp
+  src/algo_hammer.cpp
+  src/algo_march.cpp
+  src/algo_pagemix.cpp
+  src/algo_probe.cpp
+  src/algo_rwstorm.cpp
+  src/gen.cpp
+  src/log.cpp
+  src/order.cpp
+  src/params.cpp
+  src/run.cpp
+  src/seed.cpp
+  src/suite.cpp)
+if(WIN32)
+  list(APPEND ENGINE_SOURCES src/platform_win.cpp)
+else()
+  list(APPEND ENGINE_SOURCES src/platform_posix.cpp)
+endif()
+
+add_library(ddr5engine STATIC ${ENGINE_SOURCES})
+target_include_directories(ddr5engine PUBLIC src)
+target_link_libraries(ddr5engine PUBLIC ddr5_flags)
+
+add_library(ddr5engine_inject STATIC ${ENGINE_SOURCES})
+target_include_directories(ddr5engine_inject PUBLIC src)
+target_link_libraries(ddr5engine_inject PUBLIC ddr5_flags)
+target_compile_definitions(ddr5engine_inject PRIVATE DDR5TEST_INJECT)
+
+add_executable(ddr5test_cli src/main_cli.cpp)
+target_link_libraries(ddr5test_cli PRIVATE ddr5engine)
+
+add_executable(ddr5test_cli_inject src/main_cli.cpp)
+target_link_libraries(ddr5test_cli_inject PRIVATE ddr5engine_inject)
+
+add_executable(unit_tests tools/unit_tests.cpp)
+target_link_libraries(unit_tests PRIVATE ddr5engine)
+
+set(EXES ddr5test_cli ddr5test_cli_inject unit_tests)
+
+if(WIN32)
+  enable_language(RC)
+  add_executable(ddr5ramtest WIN32 src/main_gui.cpp src/app.rc)
+  target_link_libraries(ddr5ramtest PRIVATE ddr5engine)
+  if(MSVC)
+    target_link_options(ddr5ramtest PRIVATE /SUBSYSTEM:WINDOWS /MANIFEST:NO)   # the manifest is embedded by app.rc
+    target_link_libraries(ddr5ramtest PRIVATE comctl32 user32 gdi32 advapi32)
+  else()
+    target_link_options(ddr5ramtest PRIVATE -mwindows -static)
+    target_link_libraries(ddr5ramtest PRIVATE comctl32 gdi32 user32 advapi32)
+    target_link_options(ddr5test_cli PRIVATE -static)
+  endif()
+  list(APPEND EXES ddr5ramtest)
+endif()
+
+foreach(t IN LISTS EXES)
+  set_target_properties(${t} PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${DDR5_OUTPUT_DIR}")
+  foreach(cfg IN ITEMS DEBUG RELEASE RELWITHDEBINFO MINSIZEREL)
+    set_target_properties(${t} PROPERTIES RUNTIME_OUTPUT_DIRECTORY_${cfg} "${DDR5_OUTPUT_DIR}")
+  endforeach()
+endforeach()

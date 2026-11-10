@@ -1,8 +1,3 @@
-// HANDOFF [TODO] main_gui.cpp (step 5) - switch to the split headers, no logic change.
-// Replace `#include "engine.h"` with: types.h, log.h (g_emit), platform.h (plat::), run.h (Run), suite.h (Settings, run_suite).
-// Keep the comctl32/user32/gdi32/advapi32 pragma comments (or move them to CMake target_link_libraries; MinGW needs them on the command line).
-// Only AFTER parity (separate commit, optional): three direct GlobalMemoryStatusEx calls could use plat::avail_phys/total_phys.
-// Delete this block when done.
 // DDR5 RAM Test - Windows GUI front-end. Native Win32, no runtime dependencies.
 // Layout follows the familiar two-tab memory-tester window: "Testing" (status, settings, Start) and "Advanced".
 // The whole test suite is compiled in (see suite.cfg / tools/gen_suite.py); there is no config file at runtime.
@@ -12,8 +7,21 @@
 #ifndef _UNICODE
 #define _UNICODE
 #endif
-#include "engine.h"
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
 #include <commctrl.h>
+#include <cstdio>
+#include <cstdlib>
+#include <string>
+#include <vector>
+#include "log.h"
+#include "platform.h"
+#include "run.h"
+#include "suite.h"
+#include "types.h"
 #include <memory>
 #include <unordered_map>
 

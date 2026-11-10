@@ -1,4 +1,11 @@
-// HANDOFF [TODO] log.cpp - definitions for log.h.
-// Source:  engine.h 577-582. Defaults must stay g_console=false, g_tty=true. emit() falls back to stdout when g_emit is empty.
-// Notes:   no locking is added: the GUI assigns g_emit before it starts the worker thread (main_gui.cpp start_run).
-// Delete this block when done.
+// log.cpp - definitions for log.h.
+#include "log.h"
+#include <cstdarg>
+#include <cstdio>
+
+std::function<void(const std::string&)> g_emit;
+bool g_console = false;
+bool g_tty = true;   // console front-end: stdout is a terminal (live progress line); false when piped / in CI (a progress line every 30 s instead)
+void emit(const std::string& t) { if (g_emit) g_emit(t); else { fputs(t.c_str(), stdout); fflush(stdout); } }
+void emitf(const char* fmt, ...) { char b[2048]; va_list a; va_start(a, fmt); vsnprintf(b, sizeof b, fmt, a); va_end(a); emit(b); }
+void print_clear() { if (g_console && g_tty) printf("\r%*s\r", 118, ""); }

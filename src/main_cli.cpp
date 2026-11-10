@@ -1,12 +1,18 @@
-// HANDOFF [TODO] main_cli.cpp (step 5) - switch to the split headers, no logic change.
-// Replace `#include "engine.h"` with what this file uses: types.h, params.h (lower, Cfg, TestDef, parse_cfg_stream), log.h (g_console, g_tty),
-// platform.h (plat::install_ctrlc), run.h (Run), suite.h (Settings, run_suite, suite_text).
-// Exit codes 0/1/2/3 and every option check must stay exactly as they are (selftest 2b).
-// Delete this block when done.
 // ddr5test CLI front-end (console). Same engine and built-in suite as the GUI; used for headless runs and for development on Linux.
-#include "engine.h"
 #include <cctype>
 #include <cerrno>
+#include <cstdio>
+#include <cstdlib>
+#include <initializer_list>
+#include <sstream>
+#include <string>
+#include <vector>
+#include "log.h"
+#include "params.h"
+#include "platform.h"
+#include "run.h"
+#include "suite.h"
+#include "types.h"
 #ifdef _WIN32
   #include <io.h>
   #define IS_TTY(fd) _isatty(fd)
