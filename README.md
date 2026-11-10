@@ -69,7 +69,7 @@ GitHub Actions builds both on `windows-latest` and uploads them as artifacts.
 
 ## Changing the suite
 
-Edit `suite.cfg` (format documented at the top), run `python tools/gen_suite.py`, rebuild. The generated `src/suite_data.h` is committed so a normal build needs no Python.
+Edit `suite.cfg` (format documented at the top), run `python tools/gen_suite.py`, rebuild. The generated `src/suite_data.h` is committed so a normal build needs no Python. `python tools/gen_suite.py --check` reports (exit 1) if the two are out of sync; `tools/selftest.sh` runs it.
 
 ## Layout
 

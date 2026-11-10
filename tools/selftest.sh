@@ -29,6 +29,7 @@ grep -E "error|warning" "$OUT/build.log" && fail=1
 mv -f "$OUT/ddr5test_cli" "$OUT/cli"; mv -f "$OUT/ddr5test_cli_inject" "$OUT/cli_inject"
 
 echo "== 1. unit tests"
+check "suite_data.h is up to date with suite.cfg" 'python3 tools/gen_suite.py --check'
 check "orders, windows, generators, suite parsing" 'timeout $TMO "$OUT/unit_tests" > "$OUT/unit.out" 2>&1 || { cat "$OUT/unit.out"; false; }'
 
 echo "== 2. clean runs: must report no errors"

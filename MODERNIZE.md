@@ -42,7 +42,7 @@ Windows cannot be built in this environment. Windows-only files can be compile-c
 |------|------|--------|
 | M1 | Formatting + lint config (was point 5) | done |
 | M2 | Namespace `ddr5` (point 2) | done |
-| M3 | Generated `suite_data.h` cannot drift (point 8) | todo |
+| M3 | Generated `suite_data.h` cannot drift (point 8) | done |
 | M4 | Fault-injection hooks out of the algorithms (point 6) | todo |
 | M5 | Remove global mutable state (point 1), sub-steps 5a-5c | todo |
 | M6 | Split up `Run` (point 3) | todo |
@@ -81,9 +81,9 @@ Done when: `nm -C build/libddr5engine.a | grep ' [TDBR] ' | grep -v 'ddr5::'` li
 
 Why: it is generated from `suite.cfg` and committed; nothing notices if someone edits one and not the other.
 
-- [ ] Add `--check` to `tools/gen_suite.py`: generate in memory, compare with `src/suite_data.h`, exit 1 with "run python tools/gen_suite.py" if different. Keep the default behaviour (write the file) unchanged.
-- [ ] Run it from `tools/selftest.sh` (a check line `suite_data.h is up to date with suite.cfg`) and from the Windows CI job is NOT needed (Linux job covers it).
-- [ ] A unit test already parses `suite_text()`; leave it.
+- [x] Add `--check` to `tools/gen_suite.py`: generate in memory, compare with `src/suite_data.h`, exit 1 with "run python tools/gen_suite.py" if different. Keep the default behaviour (write the file) unchanged.
+- [x] Run it from `tools/selftest.sh` (a check line `suite_data.h is up to date with suite.cfg`) and from the Windows CI job is NOT needed (Linux job covers it).
+- [x] A unit test already parses `suite_text()`; leave it.
 
 Done when: editing `suite.cfg` without regenerating makes `tools/selftest.sh` fail; gate passes.
 
@@ -149,3 +149,4 @@ Done when: `ctest` runs both and passes; gate passes.
 - 2026-11-10 plan written.
 - 2026-11-10 M1 done (commit "modernize M1: add .clang-format ..." + follow-up with blame-ignore, CI format check, tidy). Engine objects byte-identical before/after reformat; gate green. 
 - 2026-11-10 M2 done. Every project symbol in libddr5engine(.inject).a is in `ddr5::` (nm check, std/compiler symbols filtered); `plat` is now `ddr5::plat`; main_cli/main_gui/unit_tests use `using namespace ddr5;`. Macros (`CBAR`) stay global. Windows files compile for x86_64-windows-gnu. Gate green. Next: M3.
+- 2026-11-10 M3 done. `tools/gen_suite.py --check` (exit 1 on drift, default write unchanged and byte-identical) runs as the first check of selftest section 1, which needs `python3`. Gate green with 54 PASS lines (53 + the new check; the new minimum is 54), 0 FAIL, 0 build warnings. Verified: appending a line to `suite.cfg` without regenerating makes `tools/selftest.sh` exit 1 (FAIL on the new line). Next: M4.
