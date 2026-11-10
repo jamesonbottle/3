@@ -261,7 +261,7 @@ static void test_suite_parses() {
     CHECK(quick == 12, "expected 12 quick tests, got %zu", quick);
     for (auto& t : tests) {
         std::string algo = lower(t.p.str("algo", "fill"));
-        CHECK(ALGOS.count(algo) == 1, "test '%s': unknown algo '%s'", t.name.c_str(), algo.c_str());
+        CHECK(algos().count(algo) == 1, "test '%s': unknown algo '%s'", t.name.c_str(), algo.c_str());
         if (algo == "fill" || algo == "march" || algo == "rwstorm" || algo == "evolve" || algo == "copy" ||
             algo == "chase")
             CHECK(!build_vars(t.p, 0, 0, test_log).empty(), "test '%s': no data variants (typo in data/style/pattern?)",

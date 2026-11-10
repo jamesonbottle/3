@@ -24,7 +24,7 @@ void algo_probe(Run& R, const Params& P);
 void algo_pagemix(Run& R, const Params& P);
 void algo_coherency(Run& R, const Params& P);
 
-extern const std::map<std::string, AlgoFn> ALGOS; // name -> test algorithm; used by the suite and the unit tests
+const std::map<std::string, AlgoFn>& algos(); // registry: name -> test algorithm; used by the suite and the unit tests
 
 // ------------------------------------------------------------------ shared helpers (algo.cpp)
 struct OrderSpec {

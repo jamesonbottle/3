@@ -91,7 +91,7 @@ int run_suite(const Settings& s, Run& R) {
             if (!flt.empty() && lower(t.name).find(flt) == std::string::npos)
                 continue;
             std::string algo = lower(t.p.str("algo", "fill"));
-            if (!ALGOS.count(algo))
+            if (!algos().count(algo))
                 continue;
             if (s.testSeconds && t.p.has("seconds"))
                 t.p.m["seconds"] = std::to_string(std::min<u64>(t.p.num("seconds", s.testSeconds), s.testSeconds));
@@ -180,7 +180,7 @@ int run_suite(const Settings& s, Run& R) {
                 R.set_label(t.name);
                 R.log.emitf("[loop %llu  %zu/%zu] %s\n", (unsigned long long)loop, ti + 1, sel.size(), t.name.c_str());
                 double ts = plat::now();
-                ALGOS.at(lower(t.p.str("algo", "fill")))(R, t.p);
+                algos().at(lower(t.p.str("algo", "fill")))(R, t.p);
                 double el = plat::now() - ts;
                 u64 bad = R.st.lines.load();
                 R.log.emitf("    %s  %.1fs  %.1f GB/s avg   coverage this test %.1fx\n",

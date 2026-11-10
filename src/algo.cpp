@@ -1,4 +1,4 @@
-// algo.cpp - shared algo helpers and the ALGOS table.
+// algo.cpp - shared algo helpers and the algo registry (algos()).
 #include "algo.h"
 #include "lineio.h"
 
@@ -59,9 +59,12 @@ bool disturb_possible(Run& R, u64 wl, const char* what) {
     return false;
 }
 
-const std::map<std::string, AlgoFn> ALGOS = {
-    {"fill", algo_fill},       {"march", algo_march},        {"hammer", algo_hammer}, {"copy", algo_copy},
-    {"chase", algo_chase},     {"rwstorm", algo_rwstorm},    {"evolve", algo_evolve}, {"probe", algo_probe},
-    {"pagemix", algo_pagemix}, {"coherency", algo_coherency}};
+const std::map<std::string, AlgoFn>& algos() {
+    static const std::map<std::string, AlgoFn> table = {
+        {"fill", algo_fill},       {"march", algo_march},        {"hammer", algo_hammer}, {"copy", algo_copy},
+        {"chase", algo_chase},     {"rwstorm", algo_rwstorm},    {"evolve", algo_evolve}, {"probe", algo_probe},
+        {"pagemix", algo_pagemix}, {"coherency", algo_coherency}};
+    return table;
+}
 
 } // namespace ddr5
