@@ -6,6 +6,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Format check (clang-format 18, see tools/format.sh)
+        run: |
+          pip install clang-format==18.1.3
+          bash tools/format.sh --check
       - name: Engine self-test
         run: bash tools/selftest.sh
   windows:

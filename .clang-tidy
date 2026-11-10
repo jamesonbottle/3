@@ -1,0 +1,11 @@
+# Report-only (tools/tidy.sh); not part of the gate. Findings go to the parking lot in MODERNIZE.md.
+Checks: >
+  -*,
+  bugprone-*,
+  performance-*,
+  readability-misleading-indentation,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-narrowing-conversions,
+  -bugprone-implicit-widening-of-multiplication-result
+WarningsAsErrors: ''
+HeaderFilterRegex: 'src/.*'

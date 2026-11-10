@@ -40,7 +40,7 @@ Windows cannot be built in this environment. Windows-only files can be compile-c
 
 | Item | What | Status |
 |------|------|--------|
-| M1 | Formatting + lint config (was point 5) | todo |
+| M1 | Formatting + lint config (was point 5) | done |
 | M2 | Namespace `ddr5` (point 2) | todo |
 | M3 | Generated `suite_data.h` cannot drift (point 8) | todo |
 | M4 | Fault-injection hooks out of the algorithms (point 6) | todo |
@@ -55,13 +55,13 @@ Order matters: M1 first so later diffs are in the final style; M2 before M5/M6 s
 
 Why: lines of 150-250 characters with several statements are hard to review and diff.
 
-- [ ] Add `.clang-format` (based on LLVM, 4-space indent, `ColumnLimit: 120`, `AllowShortFunctionsOnASingleLine: Inline`, `AllowShortLambdasOnASingleLine: Inline`, `SortIncludes: CaseSensitive` with the project headers after the system ones).
-- [ ] Add `.clang-format-ignore` listing `src/suite_data.h` (generated).
-- [ ] Add `tools/format.sh` (`tools/format.sh` rewrites, `tools/format.sh --check` fails if anything would change).
-- [ ] Reformat `src/*.h src/*.cpp tools/unit_tests.cpp` in ONE commit that changes nothing else.
-- [ ] Add that commit's hash to `.git-blame-ignore-revs` (second commit) and note `git config blame.ignoreRevsFile .git-blame-ignore-revs` in the README Layout/Build area.
-- [ ] CI (`.github/workflows/build.yml`, linux job): run `tools/format.sh --check` before the self-test.
-- [ ] Add `.clang-tidy` with a small set (`bugprone-*`, `performance-*`, `readability-misleading-indentation`, minus noisy ones) and `tools/tidy.sh` that runs it over `src/` using `compile_commands.json` (`-DCMAKE_EXPORT_COMPILE_COMMANDS=ON`). Report-only: do NOT gate on it, and do not fix its findings in this item (put them in the Parking lot).
+- [x] Add `.clang-format` (based on LLVM, 4-space indent, `ColumnLimit: 120`, `AllowShortFunctionsOnASingleLine: Inline`, `AllowShortLambdasOnASingleLine: Inline`, `SortIncludes: Never`: include order is hand-kept because Windows headers depend on it, e.g. `windows.h` before `commctrl.h`).
+- [x] Add `.clang-format-ignore` listing `src/suite_data.h` (generated).
+- [x] Add `tools/format.sh` (`tools/format.sh` rewrites, `tools/format.sh --check` fails if anything would change).
+- [x] Reformat `src/*.h src/*.cpp tools/unit_tests.cpp` in ONE commit that changes nothing else.
+- [x] Add that commit's hash to `.git-blame-ignore-revs` (second commit) and note `git config blame.ignoreRevsFile .git-blame-ignore-revs` in the README Layout/Build area.
+- [x] CI (`.github/workflows/build.yml`, linux job): run `tools/format.sh --check` before the self-test.
+- [x] Add `.clang-tidy` with a small set (`bugprone-*`, `performance-*`, `readability-misleading-indentation`, minus noisy ones) and `tools/tidy.sh` that runs it over `src/` using `compile_commands.json` (`-DCMAKE_EXPORT_COMPILE_COMMANDS=ON`). Report-only: do NOT gate on it, and do not fix its findings in this item (put them in the Parking lot).
 
 Done when: `tools/format.sh --check` passes; every engine object file is byte-identical to the one built before the reformat
 (compile each `src/*.cpp` except main_gui with `-O2 -mavx2 -std=c++20 -c`, compare `sha256sum`; formatting must not change code);
@@ -138,6 +138,7 @@ Done when: `ctest` runs both and passes; gate passes.
 
 ## Parking lot (found while working; not part of any step)
 
+- clang-tidy (tools/tidy.sh) at M1: 4 minor findings, none from `bugprone-*`: `Order::K` could be `uint8_t` (order.h), `lower(std::string s)` passes by value (params.cpp, fine: it modifies a copy), `emplace_back` in a loop without `reserve` (run.h `parallel`), string concatenation temporaries (suite.cpp ~201).
 - `Cfg` has fields that nothing reads (`memPercent`, `memMB`, `marginMB`, `cacheMB`): delete in a separate commit after M5.
 - `main_gui.cpp` calls `GlobalMemoryStatusEx` directly in three places; `plat::avail_phys/total_phys` could be used.
 - `algo_hammer` and `algo_probe` have no built-in test using them (kept on purpose, see `suite.cfg`).
@@ -145,4 +146,5 @@ Done when: `ctest` runs both and passes; gate passes.
 
 ## Log
 
-- 2026-11-10 plan written. Next: M1.
+- 2026-11-10 plan written.
+- 2026-11-10 M1 done (commit "modernize M1: add .clang-format ..." + follow-up with blame-ignore, CI format check, tidy). Engine objects byte-identical before/after reformat; gate green. Next: M2.
