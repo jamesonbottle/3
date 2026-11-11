@@ -9,6 +9,7 @@
 #include "lineio.h"
 #include "run.h"
 #include <cstdlib>
+#include <stdexcept>
 
 namespace ddr5::inject {
 
@@ -52,6 +53,13 @@ void evolve_last_pass(Run& R, int tid, size_t ji, const View& w, u64 p, u64 pass
         }
         R.sync();
     }
+}
+
+// self-test only: with DDR5TEST_THROW_IN_WORKER set, worker 1 throws between write and verify, while worker 0 is on its
+// way to the barrier. The run must end with exit code 3 and "internal error", not with std::terminate or a hang.
+void after_fill_throw(int tid) {
+    if (tid == 1 && getenv("DDR5TEST_THROW_IN_WORKER"))
+        throw std::runtime_error("injected worker failure");
 }
 
 // self-test only: with DDR5TEST_STOP_IN_EVOLVE set, raise stop at the start of rewrite pass 2, so walk() cuts that

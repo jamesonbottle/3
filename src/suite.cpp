@@ -56,6 +56,18 @@ static void fpu_stress(std::atomic<bool>& stop) {
     }
 }
 
+// Runs its function when the scope ends, normally or because an exception is leaving it. run_suite releases what it
+// acquires through these (the lambdas are local to the friend function, so they may touch Run's private members), which
+// makes the success path and the exception path release the same things in the same order (reverse of acquisition).
+template <class F>
+struct ScopeExit {
+    explicit ScopeExit(F fn) : f(std::move(fn)) {}
+    ScopeExit(const ScopeExit&) = delete;
+    ScopeExit& operator=(const ScopeExit&) = delete;
+    ~ScopeExit() { f(); }
+    F f;
+};
+
 int run_suite(const Settings& s, Run& R) {
     try {
         Cfg cfg;
@@ -126,11 +138,11 @@ int run_suite(const Settings& s, Run& R) {
                 R.log.emitf("continuing without it: errors are reported on the console only\n");
             }
         }
-        auto close_log = [&] {
+        ScopeExit logGuard([&] {
             if (R.errors.logf)
                 fclose(R.errors.logf);
             R.errors.logf = nullptr;
-        };
+        });
 
         R.cfg = cfg;
         R.layout.T = cfg.threads > 0 ? cfg.threads : std::max(1, plat::ncpu());
@@ -150,7 +162,6 @@ int run_suite(const Settings& s, Run& R) {
         u64 per = want / R.layout.T / MB2 * MB2;
         if (!per) {
             R.log.emitf("not enough memory (need at least 2 MB per thread)\n");
-            close_log();
             return 2;
         }
         u64 total = per * R.layout.T;
@@ -162,9 +173,13 @@ int run_suite(const Settings& s, Run& R) {
         R.layout.region = (u8*)plat::alloc(total, cfg.large, gotLP, locked);
         if (!R.layout.region) {
             R.log.emitf("allocation of %llu MB failed\n", (unsigned long long)(total >> 20));
-            close_log();
             return 2;
         }
+        ScopeExit regionGuard([&] {
+            if (R.layout.region)
+                plat::release(R.layout.region, total);
+            R.layout.region = nullptr;
+        });
         R.layout.regionBytes.store(total, std::memory_order_release);
         R.log.emitf("memory %s, large pages: %s\n",
                     locked ? "locked"
@@ -182,6 +197,13 @@ int run_suite(const Settings& s, Run& R) {
 
         std::atomic<bool> fpuStop{false};
         std::vector<std::thread> fpu;
+        auto stop_fpu = [&] { // also called before the summary, so the elapsed time ends when the tests do
+            fpuStop = true;
+            for (auto& th : fpu)
+                if (th.joinable())
+                    th.join();
+        };
+        ScopeExit fpuGuard(stop_fpu); // a joinable std::thread destroyed during unwinding would call std::terminate
         if (s.stressFpu)
             for (int i = 0; i < R.layout.T; i++)
                 fpu.emplace_back(fpu_stress, std::ref(fpuStop));
@@ -241,9 +263,7 @@ int run_suite(const Settings& s, Run& R) {
                 }
             }
         }
-        fpuStop = true;
-        for (auto& th : fpu)
-            th.join();
+        stop_fpu();
         double el = plat::now() - t0;
         R.log.emitf("\nfinished in %.0fs: %s (%llu bad lines, %d failing test runs)%s%s\n", el,
                     R.total.lines ? "ERRORS FOUND" : "no errors", (unsigned long long)R.total.lines.load(), failedTests,
@@ -260,15 +280,12 @@ int run_suite(const Settings& s, Run& R) {
                         (unsigned long long)runSeed);
             emit_skew("    ", R.total, total, R.log);
         }
-        if (R.errors.logf) {
-            fclose(R.errors.logf);
-            R.errors.logf = nullptr;
-        }
-        plat::release(R.layout.region, total);
-        R.layout.region = nullptr;
-        return R.total.lines ? 1 : 0;
-    } catch (const std::exception& e) {
+        return R.total.lines ? 1 : 0;   // the guards stop the FPU threads, release the region and close the log
+    } catch (const std::exception& e) { // the guards above have already run
         R.log.emitf("internal error: %s\n", e.what());
+        return 3;
+    } catch (...) {
+        R.log.emitf("internal error: unknown exception\n");
         return 3;
     }
 }

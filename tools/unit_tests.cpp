@@ -716,6 +716,80 @@ static void test_values() {
     }
 }
 
+// Exceptions: nothing that goes wrong in a worker or in run_suite's own code may end in std::terminate (a throw leaving
+// a thread function, or a joinable std::thread destroyed during unwinding). Reaching the end of these tests IS the
+// check.
+static void test_exceptions() {
+    Logger lg;
+    lg.sink = [](const std::string&) {
+    };
+    { // a worker throws: the others finish, the exception comes out of parallel() on the calling thread
+        Run R(lg);
+        R.layout.T = 3;
+        std::atomic<int> finished{0};
+        bool caught = false;
+        std::string what;
+        try {
+            R.parallel([&](int tid) {
+                if (tid == 1)
+                    throw std::runtime_error("boom 1");
+                finished++;
+            });
+        } catch (const std::exception& e) {
+            caught = true;
+            what = e.what();
+        }
+        CHECK(caught && what == "boom 1", "parallel() must rethrow the worker's exception, got '%s'", what.c_str());
+        CHECK(finished == 2, "the other workers must finish, %d did", finished.load());
+        CHECK(R.stop.load(), "a failed worker must stop the run");
+    }
+    { // the partner is already waiting at the barrier when a worker throws: it must be released, not wait forever
+        Run R(lg);
+        R.layout.T = 2;
+        std::atomic<int> passed{0};
+        bool caught = false;
+        try {
+            R.parallel([&](int tid) {
+                if (tid == 1) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(100)); // tid 0 is in sync() by now
+                    throw std::runtime_error("boom 2");
+                }
+                R.sync();
+                passed++;
+            });
+        } catch (const std::exception&) {
+            caught = true;
+        }
+        CHECK(caught && passed == 1, "a thrower must release a worker waiting at the barrier (caught %d, passed %d)",
+              (int)caught, passed.load());
+    }
+    { // an exception deep inside run_suite, while FPU threads run and memory is allocated: exit code 3, nothing leaked
+        Settings st;
+        st.megabytes = 8;
+        st.threads = 2;
+        st.largePages = false;
+        st.stressFpu = true;
+        st.filter = "Bulk copy";
+        st.loops = 1;
+        std::string text;
+        bool thrown = false;
+        Logger sink;
+        sink.sink = [&](const std::string& t) {
+            if (!thrown && t.find("[loop") != std::string::npos) {
+                thrown = true;
+                throw std::runtime_error("boom 3"); // thrown from inside run_suite, after the allocation
+            }
+            text += t;
+        };
+        Run R(sink);
+        int rc = run_suite(st, R);
+        CHECK(thrown, "the test hook never fired");
+        CHECK(rc == 3, "an exception inside run_suite must give exit code 3, got %d", rc);
+        CHECK(text.find("internal error: boom 3") != std::string::npos, "the exception must be logged");
+        CHECK(R.layout.region == nullptr, "the region must be released on the exception path");
+    }
+}
+
 // Run lifecycle seen from the front-end side: status() may be polled from another thread while run_suite works (the GUI
 // does exactly this; run it under TSan, see S12), and a Stop that arrives before the run starts must not be lost.
 static void test_run_status() {
@@ -785,6 +859,7 @@ int main() {
     test_suite_keys();
     test_values();
     test_run_status();
+    test_exceptions();
     test_fill_opts();
     test_march_opts();
     test_hammer_opts();

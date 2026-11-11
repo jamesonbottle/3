@@ -22,7 +22,7 @@ Dependencies: S9 (split `run_suite`) comes after S1 (RAII) and S8 (enums). Both 
 | ID  | Area                          | Category    | Priority | Status |
 |-----|-------------------------------|-------------|----------|--------|
 | S13 | Evolve: false errors on stop  | Correctness | High     | DONE   |
-| S1  | RAII + worker exceptions      | Reliability | Medium   | TODO   |
+| S1  | RAII + worker exceptions      | Reliability | Medium   | DONE   |
 | S2  | CLI log open failure          | Reliability | High     | DONE   |
 | S3  | Progress line error count     | Reliability | High     | DONE   |
 | S4  | `report()` hardening          | Rel + Perf  | Low      | TODO   |
@@ -46,6 +46,7 @@ Dependencies: S9 (split `run_suite`) comes after S1 (RAII) and S8 (enums). Both 
 | 2026-11-12 | S2      | DONE: `Settings::logFileSet`; log opened before the allocation; explicit `--log` that cannot be opened -> exit 2, default name -> warning; README + `--help` updated; selftest group 2d |
 | 2026-11-12 | S5      | DONE: strict `pnum_checked`, bad values recorded and reported by `bad_values()`, `run_suite` refuses to start (exit 2); unit tests for 16 bad / 10 good number forms, flags, the whole suite and 10 planted mistakes |
 | 2026-11-12 | S6      | DONE: atomics for the fields `status()` reads, no `R.stop = false`, double Ctrl-C (POSIX `SA_RESETHAND`, Windows `ExitProcess(130)`), README and `--help` updated, unit test for the status poll and for an early Stop |
+| 2026-11-12 | S1      | DONE: `ScopeExit` guards in `run_suite`, exception-safe `Run::parallel` (rethrow after join, barrier slots dropped, `aborted` flag), `catch (...)`; unit tests + inject selftest for exit code 3 |
 
 ---
 
@@ -76,7 +77,7 @@ Cause: in `src/algo_evolve.cpp` the verify walk runs right after the rewrite pas
 
 ## S1. RAII and worker exception safety
 
-**Status:** TODO
+**Status:** DONE (2026-11-12). Access question settled without any `friend`/public change: lambdas defined inside the friend `run_suite` have its access, so the guards are `ScopeExit` lambdas there (`logGuard`, `regionGuard`, `fpuGuard`; destroyed in reverse order on both the success and exception path; `catch (...)` added). `Run::parallel` keeps the first exception (worker, thread creation or monitor loop), sets `stop` and a new `aborted` flag (`report()` ignores mismatches after it), always leaves the barrier, joins, and rethrows on the calling thread; unstarted workers have their barrier slots dropped. Tests: `test_exceptions` (worker throw, partner waiting at the barrier, exception inside `run_suite` with `--fpu` and the region allocated: exit 3, logged, `R.layout.region == nullptr`) abort with `terminate` on the old code and pass now, clean under TSan; selftest case with a new inject hook (`DDR5TEST_THROW_IN_WORKER`) checks exit 3 end to end. Not covered by a test: the thread-creation-failure branch (needs an OS thread limit) and the log file closing on the exception path (the guard is the same pattern as the region guard; the unit test runs with a log sink, where no file is opened).
 
 **Problem.** `run_suite`'s `catch` (end of `src/suite.cpp`) returns 3 without releasing the region, closing `errors.logf`, or joining the FPU threads. A joinable `std::thread` destroyed during unwinding calls `std::terminate`: with `--fpu`, any exception thrown on the calling thread terminates the process during unwinding (before the catch runs), so the exit is an abort, not 3. Separately, the worker lambda in `Run::parallel` (`src/run.h`) has no try/catch, so any throw in a worker terminates the process. `Run::parallel` also terminates if `th.emplace_back` throws (thread limit), leaving started threads joinable and the barrier expecting `layout.T` participants.
 

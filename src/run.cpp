@@ -6,6 +6,9 @@
 namespace ddr5 {
 
 void Run::report(int tid, const u8* addr, const Line& e, const Line& a, const char* phase, bool reread) {
+    if (aborted.load(std::memory_order_relaxed))
+        return; // a worker has failed (run_suite will return 3): the data the others still compare is incomplete, so a
+                // mismatch is no evidence about the memory
     const u32* eb = (const u32*)&e;
     const u32* ab = (const u32*)&a;
     int perblk[4] = {0, 0, 0, 0};

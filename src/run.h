@@ -2,6 +2,7 @@
 // run.h - Chunk, View, Stats, Layout, Progress, ErrorSink, Run, walk().
 #include <algorithm>
 #include <atomic>
+#include <exception>
 #include <barrier>
 #include <chrono>
 #include <cstdio>
@@ -206,9 +207,10 @@ struct Run {
     Cfg cfg;
     Progress progress;
     ErrorSink errors;
-    Stats st, total;               // this test's / the whole run's error statistics
-    std::barrier<>* bar = nullptr; // the barrier of the parallel() in progress (sync() waits on it)
-    std::string label;             // the running test's name for the status line; guarded by errors.mu
+    Stats st, total;                  // this test's / the whole run's error statistics
+    std::barrier<>* bar = nullptr;    // the barrier of the parallel() in progress (sync() waits on it)
+    std::atomic<bool> aborted{false}; // a worker threw: report() ignores what the other workers see from then on
+    std::string label;                // the running test's name for the status line; guarded by errors.mu
 };
 static_assert(!std::is_copy_constructible_v<Run> && !std::is_copy_assignable_v<Run> &&
                   !std::is_move_constructible_v<Run> && !std::is_move_assignable_v<Run>,
@@ -219,59 +221,99 @@ void Run::parallel(F fn) {
     std::barrier<> b(layout.T);
     bar = &b;
     std::atomic<int> running{layout.T};
+    // Nothing that goes wrong in here may reach std::terminate (a joinable std::thread that is destroyed, or an
+    // exception that leaves a thread function). An exception from a worker, from creating the workers or from the
+    // monitor loop below is kept (the first one), the run is stopped and marked aborted, every started worker still
+    // leaves the barrier (so nobody waits for it forever) and is joined, and the exception is rethrown on the calling
+    // thread once all workers are gone.
+    std::exception_ptr failure;
+    std::mutex failMu;
+    auto fail = [&] { // call only from a catch block
+        {
+            std::lock_guard<std::mutex> l(failMu);
+            if (!failure)
+                failure = std::current_exception();
+        }
+        aborted = true;
+        stop = true;
+    };
     std::vector<std::thread> th;
-    for (int t = 0; t < layout.T; t++)
-        th.emplace_back([&, t] {
-            plat::pin(t);
-            fn(t);
-            vflush();
+    int started = 0;
+    try {
+        th.reserve((size_t)layout.T);
+        for (int t = 0; t < layout.T; t++) {
+            th.emplace_back([&, t] {
+                try {
+                    plat::pin(t);
+                    fn(t);
+                } catch (...) {
+                    fail();
+                }
+                vflush();
+                b.arrive_and_drop();
+                running--;
+            });
+            started++;
+        }
+    } catch (...) { // e.g. the OS thread limit: the workers that never started must not be waited for
+        fail();
+        for (int k = started; k < layout.T; k++) {
             b.arrive_and_drop();
             running--;
-        });
+        }
+    }
     double t0 = plat::now(), tl = t0, hb = t0;
     u64 dl = progress.done.load();
-    while (running.load() > 0) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(250));
-        double t = plat::now();
-        if (!stop.load() && layout.regionBytes) { // user-set stop criteria: coverage target or time limit
-            if (progress.stopCoverage && progress.vtotal.load() * 100 >= progress.stopCoverage * layout.regionBytes) {
-                progress.stopReason = "coverage target reached";
-                stop = true;
-            } else if (progress.stopSeconds > 0 && progress.tStart > 0 && t - progress.tStart >= progress.stopSeconds) {
-                progress.stopReason = "time limit reached";
-                stop = true;
+    try {
+        while (running.load() > 0) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(250));
+            double t = plat::now();
+            if (!stop.load() && layout.regionBytes) { // user-set stop criteria: coverage target or time limit
+                if (progress.stopCoverage &&
+                    progress.vtotal.load() * 100 >= progress.stopCoverage * layout.regionBytes) {
+                    progress.stopReason = "coverage target reached";
+                    stop = true;
+                } else if (progress.stopSeconds > 0 && progress.tStart > 0 &&
+                           t - progress.tStart >= progress.stopSeconds) {
+                    progress.stopReason = "time limit reached";
+                    stop = true;
+                }
+            }
+            if (t - tl >= 0.5) {
+                u64 d = progress.done.load();
+                double rate = (d - dl) / (t - tl) / 1e9;
+                tl = t;
+                dl = d;
+                std::string lab;
+                {
+                    std::lock_guard<std::mutex> l(errors.mu);
+                    lab = label;
+                }
+                char buf[220];
+                snprintf(buf, sizeof buf, "  [%5.0fs] %-50.50s %5.1f GB/s  cov %4.0f%%  errors: %llu (this test %llu)",
+                         t - t0, lab.c_str(), rate,
+                         layout.regionBytes ? 100.0 * progress.vtotal.load() / layout.regionBytes : 0.0,
+                         (unsigned long long)errors.errTotal.load(), // run total: st is reset for every test
+                         (unsigned long long)st.lines.load());
+                if (log.console && log.tty) {
+                    printf("\r%-118.118s", buf);
+                    fflush(stdout);
+                } else if (log.console && t - hb >= 30.0) {
+                    hb = t;
+                    printf("%s\n", buf);
+                    fflush(stdout);
+                }
             }
         }
-        if (t - tl >= 0.5) {
-            u64 d = progress.done.load();
-            double rate = (d - dl) / (t - tl) / 1e9;
-            tl = t;
-            dl = d;
-            std::string lab;
-            {
-                std::lock_guard<std::mutex> l(errors.mu);
-                lab = label;
-            }
-            char buf[220];
-            snprintf(buf, sizeof buf, "  [%5.0fs] %-50.50s %5.1f GB/s  cov %4.0f%%  errors: %llu (this test %llu)",
-                     t - t0, lab.c_str(), rate,
-                     layout.regionBytes ? 100.0 * progress.vtotal.load() / layout.regionBytes : 0.0,
-                     (unsigned long long)errors.errTotal.load(), // run total: st is reset for every test
-                     (unsigned long long)st.lines.load());
-            if (log.console && log.tty) {
-                printf("\r%-118.118s", buf);
-                fflush(stdout);
-            } else if (log.console && t - hb >= 30.0) {
-                hb = t;
-                printf("%s\n", buf);
-                fflush(stdout);
-            }
-        }
+    } catch (...) {
+        fail();
     }
     for (auto& x : th)
         x.join();
     bar = nullptr;
     log.print_clear();
+    if (failure)
+        std::rethrow_exception(failure);
 }
 
 // walk q = 0..n-1 through an order; f(lineIndex)

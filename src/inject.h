@@ -18,6 +18,7 @@ using StoreFn = void (*)(void*, const Line&); // IO<...>::store of the calling t
 void after_fill(Run& R, int tid, size_t ji, const View& w);
 void evolve_last_pass(Run& R, int tid, size_t ji, const View& w, u64 p, u64 passes, u64 seed, u64 maxp, StoreFn store);
 void evolve_stop_in_write(Run& R, int tid, u64 p);
+void after_fill_throw(int tid);
 void pagemix_fill_stop(Run& R, int tid, u64 pg);
 void pagemix_flip(Run& R, int tid);
 void coherency_extra(u8* mem, int tid);
