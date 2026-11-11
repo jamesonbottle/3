@@ -24,7 +24,7 @@ Dependencies: S9 (split `run_suite`) comes after S1 (RAII) and S8 (enums). Both 
 | S13 | Evolve: false errors on stop  | Correctness | High     | DONE   |
 | S1  | RAII + worker exceptions      | Reliability | Medium   | TODO   |
 | S2  | CLI log open failure          | Reliability | High     | TODO   |
-| S3  | Progress line error count     | Reliability | High     | TODO   |
+| S3  | Progress line error count     | Reliability | High     | DONE   |
 | S4  | `report()` hardening          | Rel + Perf  | Low      | TODO   |
 | S5  | Input value validation        | Reliability | Medium   | TODO   |
 | S6  | `status()` race + Ctrl-C      | Reliability | Medium   | TODO   |
@@ -42,6 +42,7 @@ Dependencies: S9 (split `run_suite`) comes after S1 (RAII) and S8 (enums). Both 
 | -          | -       | Plan created from audit |
 | 2026-11-11 | all     | Plan checked against the code and a real build; S13 added, corrections folded into S1-S12 |
 | 2026-11-12 | S13     | DONE: `R.stop` check before the evolve verify walk; new inject hook `evolve_stop_in_write` (env `DDR5TEST_STOP_IN_EVOLVE`) + selftest case. Without the fix: 3 of 3 runs report 200 false errors (log cap), exit 1; with it: 0 errors, exit 0. Stop paths of the other algos re-audited, no same-shaped bug found |
+| 2026-11-12 | S3      | DONE: progress line prints the run total plus `(this test N)` (`src/run.h`) |
 
 ---
 
@@ -115,7 +116,7 @@ Cause: in `src/algo_evolve.cpp` the verify walk runs right after the rewrite pas
 
 ## S3. Progress line shows per-test error count
 
-**Status:** TODO
+**Status:** DONE (2026-11-12). Verified on a pty with `--keep-going` and injected faults: later tests show e.g. `errors: 294 (this test 0)`; longest line 116 columns.
 
 **Problem.** `Run::parallel` in `src/run.h` prints `st.lines` (line ~252), which `run_suite` resets every test (`R.st.clear()`, `suite.cpp` ~169), instead of the run total. In keep-going mode earlier failures vanish from the live line. (Confirmed by reading; `errors.errTotal` is the right run-total field.)
 
