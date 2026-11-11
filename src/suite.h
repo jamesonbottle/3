@@ -18,6 +18,8 @@ struct Settings {
     bool largePages = true;
     int suite = 0; // 0 full, 1 quick (no long pauses / hammer)
     std::string logFile = "ddr5test.log";
+    bool logFileSet =
+        false; // true = the user named the file (--log): failing to open it is then an error, not a warning
     u64 coverageStop = 0;
     double minutes = 0;
     u64 loops = 0;

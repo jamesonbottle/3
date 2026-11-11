@@ -30,7 +30,10 @@ static void usage() {
          "             [--seed N|0xHEX]   (each run picks a random seed and prints it; pass it back with the same -mb "
          "/ -t to repeat the run)\n"
          "             [--keep-going | --stop-on-error] [--no-large-pages] [--log FILE] [--list]\n"
-         "exit code: 0 = no errors, 1 = memory errors found, 2 = could not start (bad option / not enough memory), 3 = "
+         "             (--log FILE that cannot be opened = exit 2; the default ddr5test.log that cannot be opened only "
+         "warns)\n"
+         "exit code: 0 = no errors, 1 = memory errors found, 2 = could not start (bad option / log file / not enough "
+         "memory), 3 = "
          "internal error");
 }
 
@@ -145,9 +148,10 @@ int main(int argc, char** argv) {
             s.stopOnError = true;
         else if (a == "--no-large-pages")
             s.largePages = false;
-        else if (a == "--log")
+        else if (a == "--log") {
             s.logFile = nx();
-        else if (a == "--list")
+            s.logFileSet = true;
+        } else if (a == "--list")
             list = true;
         else {
             usage();

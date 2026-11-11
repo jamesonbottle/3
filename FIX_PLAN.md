@@ -23,7 +23,7 @@ Dependencies: S9 (split `run_suite`) comes after S1 (RAII) and S8 (enums). Both 
 |-----|-------------------------------|-------------|----------|--------|
 | S13 | Evolve: false errors on stop  | Correctness | High     | DONE   |
 | S1  | RAII + worker exceptions      | Reliability | Medium   | TODO   |
-| S2  | CLI log open failure          | Reliability | High     | TODO   |
+| S2  | CLI log open failure          | Reliability | High     | DONE   |
 | S3  | Progress line error count     | Reliability | High     | DONE   |
 | S4  | `report()` hardening          | Rel + Perf  | Low      | TODO   |
 | S5  | Input value validation        | Reliability | Medium   | TODO   |
@@ -43,6 +43,7 @@ Dependencies: S9 (split `run_suite`) comes after S1 (RAII) and S8 (enums). Both 
 | 2026-11-11 | all     | Plan checked against the code and a real build; S13 added, corrections folded into S1-S12 |
 | 2026-11-12 | S13     | DONE: `R.stop` check before the evolve verify walk; new inject hook `evolve_stop_in_write` (env `DDR5TEST_STOP_IN_EVOLVE`) + selftest case. Without the fix: 3 of 3 runs report 200 false errors (log cap), exit 1; with it: 0 errors, exit 0. Stop paths of the other algos re-audited, no same-shaped bug found |
 | 2026-11-12 | S3      | DONE: progress line prints the run total plus `(this test N)` (`src/run.h`) |
+| 2026-11-12 | S2      | DONE: `Settings::logFileSet`; log opened before the allocation; explicit `--log` that cannot be opened -> exit 2, default name -> warning; README + `--help` updated; selftest group 2d |
 
 ---
 
@@ -98,7 +99,7 @@ Cause: in `src/algo_evolve.cpp` the verify walk runs right after the rewrite pas
 
 ## S2. CLI: log file open failure is silent
 
-**Status:** TODO
+**Status:** DONE (2026-11-12). Note: if S1 adds a `LogFileGuard`, it can replace the `close_log` lambda in `run_suite`, which currently closes the log on the two early returns after the open.
 
 **Problem (verified by running).** `src/suite.cpp`: `R.errors.logf = R.log.sink ? nullptr : fopen(cfg.logFile.c_str(), "a");` and nothing happens when `fopen` returns null. `--log /nonexistent/dir/x.log` exits 0 with no message and the persistent error log never exists. The GUI already handles this (temp-folder fallback plus status message, `main_gui.cpp`).
 

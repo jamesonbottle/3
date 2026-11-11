@@ -72,6 +72,12 @@ done
 check "same seed -> identical data and fault lines (run reproduced)" '[ -s "$OUT/repA.data" ] && cmp -s "$OUT/repA.data" "$OUT/repB.data"'
 check "different seed -> different data" '! cmp -s "$OUT/repA.data" "$OUT/repC.data"'
 
+echo "== 2d. log file that cannot be opened"
+timeout $TMO "$OUT/cli" $RUN -f "Bulk copy" --log /nonexistent/dir/x.log > "$OUT/logbad.out" 2>&1; rc=$?
+check "explicit --log that cannot be opened: exit 2 with the path and reason, before any test runs" '[ $rc -eq 2 ] && grep -q "cannot open log file '"'"'/nonexistent/dir/x.log'"'"'" "$OUT/logbad.out" && ! grep -q "\[loop" "$OUT/logbad.out" || { cat "$OUT/logbad.out"; false; }'
+mkdir -p "$OUT/rodir"; ( cd "$OUT/rodir" && mkdir ddr5test.log && timeout $TMO "$OUT/cli" $RUN -f "Bulk copy" > "$OUT/logdef.out" 2>&1; echo $? > "$OUT/logdef.rc" )   # a directory named like the default log: fopen fails even as root
+check "default log name that cannot be opened: warns and still exits 0 on a clean run" '[ "$(cat "$OUT/logdef.rc")" = "0" ] && grep -q "cannot open log file '"'"'ddr5test.log'"'"'" "$OUT/logdef.out" && grep -q "continuing without it" "$OUT/logdef.out" || { cat "$OUT/logdef.out"; false; }'
+
 echo "== 3. fault injection: planted faults must be found"
 log="$OUT/inj_fill.log"; rm -f "$log"
 timeout $TMO "$OUT/cli_inject" $RUN -f "Solid and checker" --log "$log" > "$OUT/inj_fill.out" 2>&1; rc=$?

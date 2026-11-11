@@ -2,6 +2,7 @@
 #include "suite.h"
 #include <algorithm>
 #include <atomic>
+#include <cerrno>
 #include <cstdio>
 #include <cstring>
 #include <exception>
@@ -101,6 +102,24 @@ int run_suite(const Settings& s, Run& R) {
             return 2;
         }
 
+        // CLI: errors also go to the log file. GUI: the front-end's log sink already writes everything (incl. errors)
+        // to its log. Opened before the allocation, so a bad --log fails at once instead of after sizing and zeroing
+        // GBs.
+        if (!R.log.sink) {
+            R.errors.logf = fopen(cfg.logFile.c_str(), "a");
+            if (!R.errors.logf) {
+                R.log.emitf("cannot open log file '%s': %s\n", cfg.logFile.c_str(), strerror(errno));
+                if (s.logFileSet)
+                    return 2;
+                R.log.emitf("continuing without it: errors are reported on the console only\n");
+            }
+        }
+        auto close_log = [&] {
+            if (R.errors.logf)
+                fclose(R.errors.logf);
+            R.errors.logf = nullptr;
+        };
+
         R.cfg = cfg;
         R.layout.T = cfg.threads > 0 ? cfg.threads : std::max(1, plat::ncpu());
         R.progress.stopCoverage = s.coverageStop;
@@ -120,6 +139,7 @@ int run_suite(const Settings& s, Run& R) {
         u64 per = want / R.layout.T / MB2 * MB2;
         if (!per) {
             R.log.emitf("not enough memory (need at least 2 MB per thread)\n");
+            close_log();
             return 2;
         }
         u64 total = per * R.layout.T;
@@ -131,6 +151,7 @@ int run_suite(const Settings& s, Run& R) {
         R.layout.region = (u8*)plat::alloc(total, cfg.large, gotLP, locked);
         if (!R.layout.region) {
             R.log.emitf("allocation of %llu MB failed\n", (unsigned long long)(total >> 20));
+            close_log();
             return 2;
         }
         R.layout.regionBytes = total;
@@ -144,9 +165,6 @@ int run_suite(const Settings& s, Run& R) {
         for (int t = 0; t < R.layout.T; t++)
             R.layout.chunks.push_back({R.layout.region + (u64)t * per, per / 64, (u64)t * (per / 64)});
         R.parallel([&](int tid) { std::memset(R.layout.chunks[tid].base, 0, per); });
-        // CLI: errors also go to the log file. GUI: the front-end's log sink already writes everything (incl. errors)
-        // to its log.
-        R.errors.logf = R.log.sink ? nullptr : fopen(cfg.logFile.c_str(), "a");
         if (R.errors.logf)
             fprintf(R.errors.logf, "---- ddr5test run, %.2f GiB, %d threads, seed 0x%016llX ----\n",
                     total / 1073741824.0, R.layout.T, (unsigned long long)runSeed);
