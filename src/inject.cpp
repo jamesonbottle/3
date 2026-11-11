@@ -54,6 +54,14 @@ void evolve_last_pass(Run& R, int tid, size_t ji, const View& w, u64 p, u64 pass
     }
 }
 
+// self-test only: with DDR5TEST_STOP_IN_EVOLVE set, raise stop at the start of rewrite pass 2, so walk() cuts that
+// pass short (it polls stop every 65,536 lines) and many lines that were due a rewrite keep their previous generation.
+// The verify that follows must then be skipped; otherwise it reports those healthy lines as errors.
+void evolve_stop_in_write(Run& R, int tid, u64 p) {
+    if (tid == 0 && p == 2 && getenv("DDR5TEST_STOP_IN_EVOLVE"))
+        R.stop = true;
+}
+
 // self-test only: with DDR5TEST_STOP_IN_FILL set, stop in the middle of the fill phase (pages
 // after this point are never filled)
 void pagemix_fill_stop(Run& R, int tid, u64 pg) {

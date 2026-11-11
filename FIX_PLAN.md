@@ -21,7 +21,7 @@ Dependencies: S9 (split `run_suite`) comes after S1 (RAII) and S8 (enums). Both 
 
 | ID  | Area                          | Category    | Priority | Status |
 |-----|-------------------------------|-------------|----------|--------|
-| S13 | Evolve: false errors on stop  | Correctness | High     | TODO   |
+| S13 | Evolve: false errors on stop  | Correctness | High     | DONE   |
 | S1  | RAII + worker exceptions      | Reliability | Medium   | TODO   |
 | S2  | CLI log open failure          | Reliability | High     | TODO   |
 | S3  | Progress line error count     | Reliability | High     | TODO   |
@@ -41,12 +41,13 @@ Dependencies: S9 (split `run_suite`) comes after S1 (RAII) and S8 (enums). Both 
 |------------|---------|------|
 | -          | -       | Plan created from audit |
 | 2026-11-11 | all     | Plan checked against the code and a real build; S13 added, corrections folded into S1-S12 |
+| 2026-11-12 | S13     | DONE: `R.stop` check before the evolve verify walk; new inject hook `evolve_stop_in_write` (env `DDR5TEST_STOP_IN_EVOLVE`) + selftest case. Without the fix: 3 of 3 runs report 200 false errors (log cap), exit 1; with it: 0 errors, exit 0. Stop paths of the other algos re-audited, no same-shaped bug found |
 
 ---
 
 ## S13. Evolving data reports false errors when a run is stopped
 
-**Status:** TODO
+**Status:** DONE (2026-11-12). Step 3 audit result: `algo_fill` and `algo_march`/`copy`/`hammer`/`chase`/`pagemix` guard their verify with `!R.stop`; `algo_rwstorm` rewrites identical data, and its unguarded final check walks the same order as the initial fill with the same poll interval, so it never reaches a line the fill did not. Remaining theoretical window: a stop raised between two threads' `R.stop` checks (one thread verifies while its neighbour has left); not reproduced, narrow, and the same shape as the pre-existing loop guards.
 
 **Problem (verified by running).** Stopping a run during the "Evolving data" test can report thousands of bad lines and exit with code 1 on healthy memory. The stop can come from Ctrl-C, the GUI Stop button, `--coverage` (reproduced) or `--minutes`/the time limit (same flag). In 16 SIGINT runs at staggered times, 6 ended with exit 1 (up to 63,486 "bad lines"); `--coverage 150` reproduced it in 2 of 9 runs. All 28 tests were interrupted with SIGINT and only this one misbehaved.
 

@@ -83,6 +83,7 @@ void algo_evolve(Run& R, const Params& P) {
                 _mm_sfence();
                 R.sync();
                 for (u64 p = 1; p <= opt.passes && !R.stop; p++) {
+                    DDR5_INJECT(evolve_stop_in_write, R, tid, p);
                     walk(R, ow, wo.rev, [&](u64 i) {
                         u64 g = w.g + i, per = evo_period(g, j.seed, opt.period);
                         if (p % per)
@@ -94,6 +95,9 @@ void algo_evolve(Run& R, const Params& P) {
                     _mm_sfence();
                     R.sync();
                     DDR5_INJECT(evolve_last_pass, R, tid, ji, w, p, opt.passes, j.seed, opt.period, &io::store);
+                    if (R.stop)
+                        break; // the rewrite walk above may have been cut short: lines it never reached still hold the
+                               // previous generation and must not be verified against this one
                     walk(R, ov, vo.rev, [&](u64 i) {
                         const u8* a = vw.base + i * 64;
                         u64 g = vw.g + i;

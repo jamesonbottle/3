@@ -93,6 +93,9 @@ timeout $TMO "$OUT/cli_inject" $RUN -f "Evolving data" --log "$log" > "$OUT/inj_
 check "evolve: exit 1" '[ $rc -eq 1 ]'
 check "evolve: exactly the lost write and the stray flip are found (2 lines)" '[ "$(grep -c "^ERROR" "$log")" = "2" ] && [ "$(grep -c "evolve-verify" "$log")" = "2" ] || { grep "run seed" "$OUT/inj_evo.out"; false; }'
 check "evolve: lost write shows as a whole stale line, the stray change as a single bit" 'grep -Eq "bits=1 " "$log" && grep -Eq "bits=[0-9]{3} " "$log"'
+log="$OUT/inj_evostop.log"; rm -f "$log"
+DDR5TEST_STOP_IN_EVOLVE=1 timeout $TMO "$OUT/cli_inject" $RUN -f "Evolving data" --log "$log" > "$OUT/inj_evostop.out" 2>&1; rc=$?
+check "evolve: stopped mid-rewrite reports no errors (lines the cut-short pass never reached are not verified)" '[ $rc -eq 0 ] && [ "$(grep -c "^ERROR" "$log" 2>/dev/null)" = "0" ] || { echo "    rc=$rc ERROR lines: $(grep -c "^ERROR" "$log" 2>/dev/null)"; grep "run seed" "$OUT/inj_evostop.out"; false; }'
 log="$OUT/inj_stop.log"; rm -f "$log"
 timeout $TMO "$OUT/cli_inject" $RUN -f "Solid and checker" --stop-on-error --log "$log" > "$OUT/inj_stop.out" 2>&1; rc=$?
 check "stop-on-error: exit 1 and no hang (barrier shutdown)" '[ $rc -eq 1 ]'
