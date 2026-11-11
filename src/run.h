@@ -203,8 +203,6 @@ struct Run {
     Stats st, total;               // this test's / the whole run's error statistics
     std::barrier<>* bar = nullptr; // the barrier of the parallel() in progress (sync() waits on it)
     std::string label;             // the running test's name for the status line; guarded by errors.mu
-    std::atomic<bool> running{
-        false}; // set by run_suite around a run (nothing reads it yet, see MODERNIZE.md parking lot)
 };
 static_assert(!std::is_copy_constructible_v<Run> && !std::is_copy_assignable_v<Run> &&
                   !std::is_move_constructible_v<Run> && !std::is_move_assignable_v<Run>,

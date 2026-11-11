@@ -85,13 +85,7 @@ bool parse_cfg_stream(std::istream& f, const std::string& path, Cfg& cfg, std::v
         }
         std::string k = lower(trim(line.substr(0, eq))), v = trim(line.substr(eq + 1));
         if (sect == "global") {
-            if (k == "memory_percent")
-                cfg.memPercent = pnum(v);
-            else if (k == "memory_mb")
-                cfg.memMB = pnum(v);
-            else if (k == "margin_mb")
-                cfg.marginMB = pnum(v);
-            else if (k == "threads")
+            if (k == "threads")
                 cfg.threads = (int)pnum(v);
             else if (k == "loops")
                 cfg.loops = pnum(v);
@@ -103,8 +97,8 @@ bool parse_cfg_stream(std::istream& f, const std::string& path, Cfg& cfg, std::v
                 cfg.logFile = v;
             else if (k == "max_errors_logged")
                 cfg.maxLog = pnum(v);
-            else if (k == "cache_mb")
-                cfg.cacheMB = pnum(v);
+            else if (k == "memory_percent" || k == "memory_mb" || k == "margin_mb" || k == "cache_mb")
+                (void)pnum(v); // old keys, no longer used; still accepted so existing config files load
             else
                 log.emitf("%s:%d: unknown global key '%s'\n", path.c_str(), lineno, k.c_str());
         } else if (sect == "default")

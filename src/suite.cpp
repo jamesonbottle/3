@@ -158,7 +158,6 @@ int run_suite(const Settings& s, Run& R) {
         R.layout.chunks.clear();
         for (int t = 0; t < R.layout.T; t++)
             R.layout.chunks.push_back({R.layout.region + (u64)t * per, per / 64, (u64)t * (per / 64)});
-        R.running = true;
         R.parallel([&](int tid) { std::memset(R.layout.chunks[tid].base, 0, per); });
         // CLI: errors also go to the log file. GUI: the front-end's log sink already writes everything (incl. errors)
         // to its log.
@@ -253,11 +252,9 @@ int run_suite(const Settings& s, Run& R) {
         }
         plat::release(R.layout.region, total);
         R.layout.region = nullptr;
-        R.running = false;
         return R.total.lines ? 1 : 0;
     } catch (const std::exception& e) {
         R.log.emitf("internal error: %s\n", e.what());
-        R.running = false;
         return 3;
     }
 }

@@ -90,8 +90,5 @@ CMakeLists.txt             engine static library (built twice: normal + fault in
 tools/gen_suite.py         suite.cfg -> suite_data.h
 tools/unit_tests.cpp       unit tests of orders / windows / generators / hash mixers / seeds / evolving data / suite parsing
 tools/selftest.sh          unit tests + clean runs + fault injection (see Self-test)
-tools/format.sh            clang-format all sources (--check in CI); tools/tidy.sh: clang-tidy report (not enforced)
-MODERNIZE.md               step-by-step maintainability plan and progress log
+tools/format.sh            clang-format all sources (--check in CI)
 ```
-
-After cloning, `git config blame.ignoreRevsFile .git-blame-ignore-revs` keeps `git blame` pointing at real changes instead of the mechanical reformat.
