@@ -95,7 +95,7 @@ const Keys& algo_keys(const std::string& algo) {
         {"rwstorm",
          keys_of({common, data, window, stride, Keys{"flush", "nt", "order", "passes", "verify_order", "width"}})},
         {"copy", keys_of({common, data, window, Keys{"block", "method"}})},
-        {"hammer", keys_of({common, data, window, Keys{"acts", "aggressors", "rounds", "rowstride"}})},
+        {"hammer", keys_of({common, data, window, HammerOpts::keys()})},
         {"chase", keys_of({common, window, Keys{"mlp", "seeds"}})},
         {"probe", keys_of({common, Keys{"samples", "stride"}})},
         {"pagemix", keys_of({common, Keys{"seconds"}})},

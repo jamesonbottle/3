@@ -118,4 +118,13 @@ struct MarchOpts {
     static MarchOpts from(const Params& P, const Logger& log);
 };
 
+struct HammerOpts {
+    std::vector<u64> rowstride;  // distance between aggressor rows, bytes (empty = no jobs, as before)
+    std::vector<u64> aggressors; // aggressor rows per round (n-sided)
+    u64 acts = 400000;           // activations per aggressor per round
+    u64 rounds = 24;             // rounds per job
+    static const std::set<std::string>& keys();
+    static HammerOpts from(const Params& P);
+};
+
 } // namespace ddr5

@@ -446,6 +446,28 @@ static void test_march_opts() {
         [&](const Params& p2) { return march_sig(MarchOpts::from(p2, cap)); }, {{"march", "u(w0)"}});
 }
 
+// HammerOpts::from(): defaults, parsing.
+static std::string hammer_sig(const HammerOpts& o) {
+    std::string s = "r";
+    for (u64 v : o.rowstride)
+        s += std::to_string(v) + ",";
+    s += " a";
+    for (u64 v : o.aggressors)
+        s += std::to_string(v) + ",";
+    return s + " acts" + std::to_string(o.acts) + " rounds" + std::to_string(o.rounds);
+}
+static void test_hammer_opts() {
+    CHECK(hammer_sig(HammerOpts::from(Params())) == "r262144,1048576, a2,9, acts400000 rounds24",
+          "hammer defaults changed: %s", hammer_sig(HammerOpts::from(Params())).c_str());
+    Params p;
+    p.m = {{"rowstride", "64K, 2M"}, {"aggressors", "3"}, {"acts", "1K"}, {"rounds", "0"}};
+    CHECK(hammer_sig(HammerOpts::from(p)) == "r65536,2097152, a3, acts1024 rounds0", "hammer options misparsed: %s",
+          hammer_sig(HammerOpts::from(p)).c_str());
+    check_opts_keys("Hammer", HammerOpts::keys(),
+                    {{"acts", "5"}, {"aggressors", "3"}, {"rounds", "2"}, {"rowstride", "64K"}},
+                    [](const Params& q) { return hammer_sig(HammerOpts::from(q)); });
+}
+
 int main() {
     test_log.sink = [](const std::string& s) {
         printf("  (engine) %s", s.c_str());
@@ -460,6 +482,7 @@ int main() {
     test_suite_keys();
     test_fill_opts();
     test_march_opts();
+    test_hammer_opts();
     if (g_fail) {
         printf("%d check(s) FAILED\n", g_fail);
         return 1;
