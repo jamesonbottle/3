@@ -80,41 +80,54 @@ std::vector<MVar> parse_march_variants(const std::string& str, const Logger& log
     }
     return out;
 }
-void algo_march(Run& R, const Params& P) {
-    auto vars = build_vars(P, R.salt, R.rng, R.log);
-    auto mvs = parse_march_variants(P.str("march"), R.log);
-    if (mvs.empty()) {
-        R.log.emitf("march: no elements\n");
-        return;
-    }
-    std::vector<std::pair<std::string, OrderSpec>> orders;
+// ------------------------------------------------------------------ options (the only place march reads its keys)
+// `stride` (stride_list), `window_mb` (Run::window_lines) and the data keys (build_vars) belong to shared helpers.
+const std::set<std::string>& MarchOpts::keys() {
+    static const std::set<std::string> k = {"burst", "flush", "march", "nt", "order", "width"};
+    return k;
+}
+MarchOpts MarchOpts::from(const Params& P, const Logger& log) {
+    MarchOpts o;
+    o.variants = parse_march_variants(P.str("march"), log);
+    if (o.variants.empty())
+        return o; // algo_march reports "no elements"; a bad `order` is not reported then (as before)
     for (auto& w : P.words("order", "seq")) {
         OrderSpec os;
         if (!Order::parse(w, os.k, os.rev)) {
-            R.log.emitf("bad order '%s'\n", w.c_str());
+            log.emitf("bad order '%s'\n", w.c_str());
             continue;
         }
-        orders.push_back({w, os});
+        o.orders.push_back({w, os});
     }
-    if (orders.empty())
-        orders.push_back({"seq", OrderSpec()});
+    if (o.orders.empty())
+        o.orders.push_back({"seq", OrderSpec()});
     bool anyStride = false;
-    for (auto& o : orders)
-        if (o.second.k == Order::STRIDE)
+    for (auto& on : o.orders)
+        if (on.second.k == Order::STRIDE)
             anyStride = true;
-    auto strides = stride_list(P, anyStride);
-    auto bursts = P.nums("burst", "1");
-    if (bursts.empty())
-        bursts.push_back(1);
-    int width = (int)P.num("width", 32);
-    bool nt = P.flag("nt", false), fl = P.flag("flush", true);
-    u64 wl = R.window_lines(P);
-    bool anyDist = false;
-    for (auto& m : mvs)
+    o.strides = stride_list(P, anyStride);
+    o.bursts = P.nums("burst", "1");
+    if (o.bursts.empty())
+        o.bursts.push_back(1);
+    o.width = (int)P.num("width", 32);
+    o.nt = P.flag("nt", false);
+    o.flush = P.flag("flush", true);
+    for (auto& m : o.variants)
         for (auto& e : m.els)
             if (e.dist)
-                anyDist = true;
-    bool distOk = !anyDist || disturb_possible(R, wl, R.testName.c_str());
+                o.anyDist = true;
+    return o;
+}
+
+void algo_march(Run& R, const Params& P) {
+    auto vars = build_vars(P, R.salt, R.rng, R.log);
+    const MarchOpts opt = MarchOpts::from(P, R.log);
+    if (opt.variants.empty()) {
+        R.log.emitf("march: no elements\n");
+        return;
+    }
+    u64 wl = R.window_lines(P);
+    bool distOk = !opt.anyDist || disturb_possible(R, wl, R.testName.c_str());
     struct Job {
         std::string label;
         const Gen* g;
@@ -125,21 +138,22 @@ void algo_march(Run& R, const Params& P) {
     };
     std::vector<Job> jobs;
     for (auto& v : vars)
-        for (size_t mi = 0; mi < mvs.size(); mi++)
-            for (auto& on : orders) {
+        for (size_t mi = 0; mi < opt.variants.size(); mi++)
+            for (auto& on : opt.orders) {
                 std::vector<u64> sl;
                 if (on.second.k == Order::STRIDE)
-                    sl = strides;
+                    sl = opt.strides;
                 else
                     sl.push_back(1);
                 for (u64 s : sl)
-                    for (u64 b : bursts)
+                    for (u64 b : opt.bursts)
                         jobs.push_back(
-                            {v.label + (mvs.size() > 1 ? " | " + mvs[mi].label : "") +
-                                 (orders.size() > 1 || on.second.k != Order::SEQ || on.second.rev ? " order=" + on.first
-                                                                                                  : "") +
+                            {v.label + (opt.variants.size() > 1 ? " | " + opt.variants[mi].label : "") +
+                                 (opt.orders.size() > 1 || on.second.k != Order::SEQ || on.second.rev
+                                      ? " order=" + on.first
+                                      : "") +
                                  (on.second.k == Order::STRIDE ? " stride=" + std::to_string(s * 64) + "B" : "") +
-                                 (bursts.size() > 1 || b > 1 ? " burst=" + std::to_string(b) : ""),
+                                 (opt.bursts.size() > 1 || b > 1 ? " burst=" + std::to_string(b) : ""),
                              &v.g, mi, on.second, s, b});
             }
     u64 base = R.winctr[R.testName];
@@ -149,13 +163,13 @@ void algo_march(Run& R, const Params& P) {
             if (R.stop)
                 break;
             const Job& j = jobs[ji];
-            const auto& els = mvs[j.mi].els;
+            const auto& els = opt.variants[j.mi].els;
             if (tid == 0)
                 R.set_label(j.label);
             View w = R.view(tid, wl, base + ji);
             Order o;
             o.init(j.os.k, w.n, j.stride, 5 + ji, R.salt);
-            dispatch(width, nt, fl, [&](auto Wc, auto NTc, auto FLc) {
+            dispatch(opt.width, opt.nt, opt.flush, [&](auto Wc, auto NTc, auto FLc) {
                 using io = IO<decltype(Wc)::value, decltype(NTc)::value, decltype(FLc)::value>;
                 for (size_t ei = 0; ei < els.size(); ei++) {
                     const MEl& e = els[ei];

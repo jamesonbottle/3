@@ -89,7 +89,7 @@ const Keys& algo_keys(const std::string& algo) {
     static const Keys stride = {"stride"};
     static const std::map<std::string, Keys> table = {
         {"fill", keys_of({common, data, window, stride, FillOpts::keys()})},
-        {"march", keys_of({common, data, window, stride, Keys{"burst", "flush", "march", "nt", "order", "width"}})},
+        {"march", keys_of({common, data, window, stride, MarchOpts::keys()})},
         {"evolve", keys_of({common, data, window, stride,
                             Keys{"cross", "flush", "nt", "order", "passes", "period", "verify_order", "width"}})},
         {"rwstorm",

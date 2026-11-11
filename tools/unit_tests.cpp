@@ -4,6 +4,8 @@
 #include <set>
 #include <cstdio>
 #include <cstring>
+#include <functional>
+#include <map>
 #include <sstream>
 #include "algo.h"
 #include "gen.h"
@@ -304,6 +306,28 @@ static void test_suite_keys() {
     }
 }
 
+// Every key an XOpts lists must change what XOpts::from() returns (a stale entry would hide a typo of that key), and
+// the sample table must have a non-default value for each listed key and no key that is not listed.
+static void check_opts_keys(const char* algo, const std::set<std::string>& keys,
+                            const std::map<std::string, std::string>& sample,
+                            const std::function<std::string(const Params&)>& sig,
+                            const std::map<std::string, std::string>& base = {}) {
+    Params b0;
+    b0.m = base; // a config that makes every other key matter (march: needs at least one element)
+    std::string d = sig(b0);
+    for (const std::string& k : keys) {
+        auto it = sample.find(k);
+        CHECK(it != sample.end(), "%s: test has no sample value for key '%s'", algo, k.c_str());
+        if (it == sample.end())
+            continue;
+        Params one = b0;
+        one.m[k] = it->second;
+        CHECK(sig(one) != d, "%s key '%s' changes nothing in %sOpts::from", algo, k.c_str(), algo);
+    }
+    for (auto& kv : sample)
+        CHECK(keys.count(kv.first), "%s: sample key '%s' is not in %sOpts::keys()", algo, kv.first.c_str(), algo);
+}
+
 // FillOpts::from() replaced the P.* reads of algo_fill: it must give the old defaults and the old clamps/fallbacks, and
 // every key it lists must change something (a stale entry in keys() would hide a typo of that key).
 static std::string fill_sig(const FillOpts& o) {
@@ -352,20 +376,74 @@ static void test_fill_opts() {
     FillOpts of = FillOpts::from(f, test_log);
     CHECK(of.write.k == Order::RANDOM && of.verify.k == Order::RANDOM, "verify_order must default to order");
 
-    const std::map<std::string, std::string> other = {
-        {"both", "1"},   {"cross", "1"}, {"disturb", "rw"}, {"disturb_passes", "5"}, {"dwell_ms", "7"},
-        {"flush", "0"},  {"nt", "1"},    {"order", "rev"},  {"reads", "3"},          {"verify_order", "random"},
-        {"width", "128"}};
-    for (const std::string& k : FillOpts::keys()) {
-        auto it = other.find(k);
-        CHECK(it != other.end(), "test has no sample value for fill key '%s'", k.c_str());
-        if (it == other.end())
-            continue;
-        Params one;
-        one.m[k] = it->second;
-        CHECK(fill_sig(FillOpts::from(one, test_log)) != fill_sig(d), "fill key '%s' changes nothing in FillOpts::from",
-              k.c_str());
-    }
+    check_opts_keys("Fill", FillOpts::keys(),
+                    {{"both", "1"},
+                     {"cross", "1"},
+                     {"disturb", "rw"},
+                     {"disturb_passes", "5"},
+                     {"dwell_ms", "7"},
+                     {"flush", "0"},
+                     {"nt", "1"},
+                     {"order", "rev"},
+                     {"reads", "3"},
+                     {"verify_order", "random"},
+                     {"width", "128"}},
+                    [](const Params& p) { return fill_sig(FillOpts::from(p, test_log)); });
+}
+
+// MarchOpts::from(): defaults, parsing, and the one ordering that matters: with no march elements nothing after the
+// march is parsed, so a bad `order` is not reported (algo_march prints "march: no elements" and returns).
+static std::string march_sig(const MarchOpts& o) {
+    std::string s = "v";
+    for (auto& v : o.variants)
+        s += v.label + ":" + std::to_string(v.els.size()) + ",";
+    s += " o";
+    for (auto& on : o.orders)
+        s += on.first + ":" + std::to_string((int)on.second.k) + (on.second.rev ? "r" : "f") + ",";
+    s += " s";
+    for (u64 v : o.strides)
+        s += std::to_string(v) + ",";
+    s += " b";
+    for (u64 v : o.bursts)
+        s += std::to_string(v) + ",";
+    return s + " " + std::to_string(o.anyDist) + std::to_string(o.nt) + std::to_string(o.flush) + " w" +
+           std::to_string(o.width);
+}
+static void test_march_opts() {
+    std::string said;
+    Logger cap;
+    cap.sink = [&](const std::string& t) {
+        said += t;
+    };
+    Params empty;
+    empty.m = {{"order", "bogus"}, {"burst", "4"}};
+    MarchOpts e = MarchOpts::from(empty, cap);
+    CHECK(e.variants.empty() && e.orders.empty() && e.bursts.empty() && said.empty(),
+          "no march elements: nothing after `march` may be parsed or reported (said '%s')", said.c_str());
+
+    Params d;
+    d.m = {{"march", "u(w0) v(r0,w1) X(r2) D(10)"}};
+    MarchOpts o = MarchOpts::from(d, cap);
+    CHECK(march_sig(o) == "vmarch1:4, oseq:0f, s1, b1, 101 w32", "march defaults changed: %s", march_sig(o).c_str());
+
+    Params p;
+    p.m = {{"march", "a=u(w0) | b=v(r0)"},
+           {"order", "stride bogus down"},
+           {"stride", "4K"},
+           {"burst", "2, 8"},
+           {"width", "64"},
+           {"nt", "1"},
+           {"flush", "0"}};
+    said.clear();
+    MarchOpts q = MarchOpts::from(p, cap);
+    CHECK(march_sig(q) == "va:1,b:1, ostride:1f,down:0r, s64, b2,8, 010 w64", "march options misparsed: %s",
+          march_sig(q).c_str());
+    CHECK(said == "bad order 'bogus'\n", "march: wrong message for a bad order: '%s'", said.c_str());
+
+    check_opts_keys(
+        "March", MarchOpts::keys(),
+        {{"burst", "4"}, {"flush", "0"}, {"march", "u(w0) v(r0)"}, {"nt", "1"}, {"order", "rev"}, {"width", "64"}},
+        [&](const Params& p2) { return march_sig(MarchOpts::from(p2, cap)); }, {{"march", "u(w0)"}});
 }
 
 int main() {
@@ -381,6 +459,7 @@ int main() {
     test_suite_parses();
     test_suite_keys();
     test_fill_opts();
+    test_march_opts();
     if (g_fail) {
         printf("%d check(s) FAILED\n", g_fail);
         return 1;
