@@ -46,7 +46,7 @@ Windows cannot be built in this environment. Windows-only files can be compile-c
 | M4 | Fault-injection hooks out of the algorithms (point 6) | done |
 | M5 | Remove global mutable state (point 1), sub-steps 5a-5c | done |
 | M6 | Split up `Run` (point 3) | done |
-| M7 | Typed, validated test parameters (point 4), sub-steps 7a-7j | partial (7a-7i done) |
+| M7 | Typed, validated test parameters (point 4), sub-steps 7a-7j | done |
 | M8 | Test runner: CTest (+ optional framework) (point 7) | todo |
 
 Order matters: M1 first so later diffs are in the final style; M2 before M5/M6 so new types land in the namespace; M5 before M6 and M7.
@@ -133,7 +133,7 @@ Why: `Params` is `map<string,string>`; a misspelled key in `suite.cfg` is silent
 - [x] **7j-1 `PagemixOpts`** (pagemix).
 - [x] **7j-2 `CoherencyOpts`** (coherency).
 - [x] (all of 7b-7j, one algo per commit: fill, march, hammer, copy, chase, rwstorm, evolve, probe, pagemix, coherency). Each gets `struct XOpts { ... static XOpts from(const Params&); }` parsed once before `R.parallel`; the algo body uses fields only. Defaults must equal the current `P.num("key", default)` values.
-- [ ] Remove the now-unused `Params` accessors only after the last algo is converted.
+- [x] Remove the now-unused `Params` accessors only after the last algo is converted. (None is unused: `has/str/num/flag/words/nums` are still read by the suite parser, `build_vars`, `ospec`, `stride_list`, `Run::window_lines` and the front-ends, so nothing was removed.)
 
 Done when: no `P.num/P.str/P.flag/P.words/P.nums` call remains inside an `algo_*.cpp` (only in the `from()` functions); a misspelled key fails `tools/selftest.sh`; gate passes.
 
@@ -149,7 +149,7 @@ Done when: `ctest` runs both and passes; gate passes.
 ## Parking lot (found while working; not part of any step)
 
 - clang-tidy (tools/tidy.sh) at M1: 4 minor findings, none from `bugprone-*`: `Order::K` could be `uint8_t` (order.h), `lower(std::string s)` passes by value (params.cpp, fine: it modifies a copy), `emplace_back` in a loop without `reserve` (run.h `parallel`), string concatenation temporaries (suite.cpp ~201).
-- M7b: `algo_fill` still hands `P` to the shared helpers `build_vars`, `Run::window_lines` (and `from()` hands it to `stride_list`/`ospec`); those read the keys `data`, `window_mb`, `stride`, `order`. That is not a `P.num/P.str/...` call inside the algo, so the M7 done-when holds, but typed `DataOpts`/window/stride structs could replace them after 7j (decide then).
+- M7: the algos still hand `P` to the shared helpers `build_vars` (data keys), `Run::window_lines` (`window_mb`) and, from `from()`, to `stride_list`/`ospec`. That is not a `P.num/P.str/...` call inside an algo, so the M7 done-when holds, but a typed `DataOpts` / window / stride struct could replace the hand-kept `data`/`window`/`stride` key sets in `algo_keys()`. Each `XOpts::keys()` is also hand-kept next to its `from()`; the unit tests catch a stale entry but not a read that nobody listed (that one shows up as a false 'unused key' on a real suite.cfg key).
 - `Run::running` is written by `run_suite` (true/false around a run) and never read by anything; delete it (or use it) in a separate commit. `parallel()` also has a local `running` that shadows it.
 - `run_suite` silently skips a test whose `algo` is not in `algos()` (a typo there is not reported at run time; only the unit test checks the built-in suite's algo names). Report it next to the new unused-key message, e.g. in M7a's loop or in M7b.
 - `Cfg` has fields that nothing reads (`memPercent`, `memMB`, `marginMB`, `cacheMB`): delete in a separate commit after M5.
@@ -182,3 +182,4 @@ Done when: `ctest` runs both and passes; gate passes.
 - 2026-11-11 M7i done. `ProbeOpts` (`stride samples`; `from(P)`; `samples >= 1000`; default sweep 64 B .. 16 MB, 19 strides). No built-in test uses probe, so besides the gate I ran the old (HEAD) and new engine from scratch copies with an extra `[test] algo = probe` block (`stride = 4K 64K 1M`, `samples = 2000`): exit 0 and the same output structure (3 stride rows, same summary text; the numbers are timing measurements). New `test_probe_opts`. Gate green: 54 PASS, 0 FAIL, 0 warnings, format clean. Next: 7j (`PagemixOpts`, `CoherencyOpts`), then remove the unused `Params` accessors.
 - 2026-11-11 M7j (1/2) done. `PagemixOpts` (`seconds`, default 30; `from(P)`). New `test_pagemix_opts`. Covered by the self-test ("Page shuffle" clean run, the page-shuffle injection checks incl. the stop-in-fill one). Gate green incl. injection build: 54 PASS, 0 FAIL, 0 warnings, format clean. Next: 7j (2/2) `CoherencyOpts`, then remove the unused `Params` accessors.
 - 2026-11-11 M7j (2/2) done. `CoherencyOpts` (`lines inc seconds`; defaults `2 8 64` / 1000 / 8 s; `inc >= 1`). `algo_coherency` copies `inc` and `seconds` into plain locals, so the false-sharing increment loop is unchanged. New `test_coherency_opts`. Covered by the self-test ("Cache coherency" clean run and the coherency injection). Gate green incl. injection build: 54 PASS, 0 FAIL, 0 warnings, format clean. All ten algos now have an `XOpts`; next: remove unused `Params` accessors, tidy the key-table comments, close M7.
+- 2026-11-11 M7 done. Done-when checked: every `P.num/str/flag/words/nums/has` read in `src/algo_*.cpp` is inside an `XOpts::from()` (awk over each file, nothing outside); a misspelled key fails the self-test (mutation check: `reads`, `dwell_ms`, `passes`, `mlp` each renamed in `suite.cfg` + regenerated -> `unit_tests` reports it; all reverted); no `Params` accessor became unused, so none was removed. Key-table comments in `algo.cpp` rewritten (only the helper-owned `common/data/window/stride` sets are still hand-kept there), README layout line mentions the typed options. Gate green: 54 PASS, 0 FAIL, 0 warnings, format clean. Next: M8 (CTest).

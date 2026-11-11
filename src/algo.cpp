@@ -68,11 +68,11 @@ const std::map<std::string, AlgoFn>& algos() {
 }
 
 // ------------------------------------------------------------------ the keys each algo understands
-// Everything the algo_*.cpp (and the helpers it calls) reads from Params: build_vars() for the data keys, stride_list()
-// for `stride`, Run::window_lines() for `window_mb`, ospec() for `order`/`verify_order`. A key in suite.cfg that is not
-// listed here would be ignored without a word, so run_suite reports it and the unit tests fail on it. Keep this table
-// in step with the P.* reads until M7b-7j replace it with the typed XOpts::from() functions; an algo that already has
-// one (fill: FillOpts) takes its own keys from XOpts::keys(), next to the reads.
+// A key in suite.cfg that no algo reads would be ignored without a word, so run_suite reports it and the unit tests
+// fail on it. Each algo's own keys come from its XOpts::keys() (algo.h), which sits next to the XOpts::from() that
+// reads them (the unit tests check that every listed key changes the result). The sets below belong to shared helpers
+// that take Params: build_vars() for the data keys, stride_list() for `stride`, Run::window_lines() for `window_mb`;
+// they must be kept in step with those helpers by hand.
 using Keys = std::set<std::string>;
 static Keys keys_of(std::initializer_list<Keys> parts) {
     Keys all;

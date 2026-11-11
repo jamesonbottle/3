@@ -80,7 +80,7 @@ src/log.h/.cpp     Logger (output sink)            src/params.h/.cpp     string 
 src/seed.h/.cpp    run seed, hash mixer   src/order.h/.cpp      address orders
 src/gen.h/.cpp     data generators        src/lineio.h          64-byte store/load/verify (templates)
 src/run.h/.cpp     Run, walk, error report
-src/algo.h/.cpp    shared algo helpers + the algos() registry;  src/algo_*.cpp  one file per test algorithm
+src/algo.h/.cpp    shared algo helpers, typed per-algo options (FillOpts ...), the algos() registry;  src/algo_*.cpp  one file per test algorithm
 src/suite.h/.cpp   run_suite(), failure summary, FPU stress;  src/suite_data.h  generated from suite.cfg
 src/inject.h/.cpp  fault-injection hooks (DDR5_INJECT) for the self-test; inject.cpp is only in the injection engine
 src/main_gui.cpp   Win32 GUI              src/main_cli.cpp      console front-end
