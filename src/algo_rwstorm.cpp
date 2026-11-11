@@ -12,6 +12,24 @@
 
 namespace ddr5 {
 
+// ------------------------------------------------------------------ options (the only place rwstorm reads its keys)
+// `stride` (stride_list), `window_mb` (Run::window_lines) and the data keys (build_vars) belong to shared helpers.
+const std::set<std::string>& RwstormOpts::keys() {
+    static const std::set<std::string> k = {"flush", "nt", "order", "passes", "verify_order", "width"};
+    return k;
+}
+RwstormOpts RwstormOpts::from(const Params& P, const Logger& log) {
+    RwstormOpts o;
+    o.write = ospec(P, "order", "random", log);
+    o.verify = ospec(P, "verify_order", "seq", log);
+    o.strides = stride_list(P, o.write.k == Order::STRIDE || o.verify.k == Order::STRIDE);
+    o.width = (int)P.num("width", 32);
+    o.nt = P.flag("nt", false);
+    o.flush = P.flag("flush", true);
+    o.passes = std::max<u64>(1, P.num("passes", 4));
+    return o;
+}
+
 // ------------------------------------------------------------------ algo: rwstorm (concurrent read + write traffic on
 // the same memory) Even threads keep rewriting their chunk with IDENTICAL data while their odd partner thread verifies
 // that chunk at the same time. Stores and loads are in flight together (bus turnaround, write queue drain,
@@ -19,11 +37,9 @@ namespace ddr5 {
 // thread verifies its own chunk.
 void algo_rwstorm(Run& R, const Params& P) {
     auto vars = build_vars(P, R.salt, R.rng, R.log);
-    OrderSpec wo = ospec(P, "order", "random", R.log), vo = ospec(P, "verify_order", "seq", R.log);
-    auto strides = stride_list(P, wo.k == Order::STRIDE || vo.k == Order::STRIDE);
-    int width = (int)P.num("width", 32);
-    bool nt = P.flag("nt", false), fl = P.flag("flush", true);
-    u64 passes = std::max<u64>(1, P.num("passes", 4)), wl = R.window_lines(P);
+    const RwstormOpts opt = RwstormOpts::from(P, R.log);
+    const OrderSpec &wo = opt.write, &vo = opt.verify;
+    u64 wl = R.window_lines(P);
     struct Job {
         std::string label;
         const Gen* g;
@@ -31,7 +47,7 @@ void algo_rwstorm(Run& R, const Params& P) {
     };
     std::vector<Job> jobs;
     for (auto& v : vars)
-        for (u64 s : strides)
+        for (u64 s : opt.strides)
             jobs.push_back({v.label, &v.g, s});
     u64 base = R.winctr[R.testName];
     R.winctr[R.testName] += jobs.size();
@@ -49,7 +65,7 @@ void algo_rwstorm(Run& R, const Params& P) {
             ow.init(wo.k, w.n, j.stride, 3 + ji, R.salt);
             ov.init(vo.k, pv.n, j.stride, 9 + ji, R.salt);
             of.init(Order::SEQ, w.n, 1, 0, R.salt);
-            dispatch(width, nt, fl, [&](auto Wc, auto NTc, auto FLc) {
+            dispatch(opt.width, opt.nt, opt.flush, [&](auto Wc, auto NTc, auto FLc) {
                 using io = IO<decltype(Wc)::value, decltype(NTc)::value, decltype(FLc)::value>;
                 auto wr = [&](u64 i) {
                     u8* a = w.base + i * 64;
@@ -70,7 +86,7 @@ void algo_rwstorm(Run& R, const Params& P) {
                 walk(R, of, false, wr);
                 _mm_sfence();
                 R.sync(); // initial fill of own chunk
-                for (u64 p = 0; p < passes && !R.stop; p++) {
+                for (u64 p = 0; p < opt.passes && !R.stop; p++) {
                     if (writer)
                         walk(R, ow, wo.rev, wr); // rewrite same data
                     else

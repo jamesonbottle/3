@@ -510,6 +510,29 @@ static void test_chase_opts() {
                     [](const Params& q) { return chase_sig(ChaseOpts::from(q)); });
 }
 
+// RwstormOpts::from(): defaults (writer order random, reader order seq), parsing, clamp.
+static std::string rwstorm_sig(const RwstormOpts& o) {
+    std::string s = std::to_string((int)o.write.k) + (o.write.rev ? "r " : "f ") + std::to_string((int)o.verify.k) +
+                    (o.verify.rev ? "r" : "f") + " s";
+    for (u64 v : o.strides)
+        s += std::to_string(v) + ",";
+    return s + " w" + std::to_string(o.width) + " nt" + std::to_string(o.nt) + " fl" + std::to_string(o.flush) + " p" +
+           std::to_string(o.passes);
+}
+static void test_rwstorm_opts() {
+    CHECK(rwstorm_sig(RwstormOpts::from(Params(), test_log)) == "2f 0f s1, w32 nt0 fl1 p4",
+          "rwstorm defaults changed: %s", rwstorm_sig(RwstormOpts::from(Params(), test_log)).c_str());
+    Params p;
+    p.m = {{"order", "stride"}, {"verify_order", "down"}, {"stride", "4K 8K"}, {"width", "16"},
+           {"nt", "1"},         {"flush", "0"},           {"passes", "0"}};
+    CHECK(rwstorm_sig(RwstormOpts::from(p, test_log)) == "1f 0r s64,128, w16 nt1 fl0 p1",
+          "rwstorm options misparsed: %s", rwstorm_sig(RwstormOpts::from(p, test_log)).c_str());
+    check_opts_keys(
+        "Rwstorm", RwstormOpts::keys(),
+        {{"flush", "0"}, {"nt", "1"}, {"order", "rev"}, {"passes", "9"}, {"verify_order", "random"}, {"width", "64"}},
+        [](const Params& q) { return rwstorm_sig(RwstormOpts::from(q, test_log)); });
+}
+
 int main() {
     test_log.sink = [](const std::string& s) {
         printf("  (engine) %s", s.c_str());
@@ -527,6 +550,7 @@ int main() {
     test_hammer_opts();
     test_copy_opts();
     test_chase_opts();
+    test_rwstorm_opts();
     if (g_fail) {
         printf("%d check(s) FAILED\n", g_fail);
         return 1;

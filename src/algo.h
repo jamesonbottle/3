@@ -142,4 +142,15 @@ struct ChaseOpts {
     static ChaseOpts from(const Params& P);
 };
 
+struct RwstormOpts {
+    OrderSpec write{Order::RANDOM, false}; // order (the writer's order)
+    OrderSpec verify;                      // verify_order (the reader's order, default seq)
+    std::vector<u64> strides;              // stride, in lines; {1} unless an order is a stride order
+    int width = 32;
+    bool nt = false, flush = true;
+    u64 passes = 4; // passes of rewrite / concurrent verify (>= 1)
+    static const std::set<std::string>& keys();
+    static RwstormOpts from(const Params& P, const Logger& log);
+};
+
 } // namespace ddr5
