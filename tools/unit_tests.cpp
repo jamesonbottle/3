@@ -562,6 +562,26 @@ static void test_evolve_opts() {
                     [](const Params& q) { return evolve_sig(EvolveOpts::from(q, test_log)); });
 }
 
+// ProbeOpts::from(): the default stride sweep (64 B .. 16 MB), parsing, the sample clamp.
+static std::string probe_sig(const ProbeOpts& o) {
+    std::string s = "st";
+    for (u64 v : o.stride)
+        s += std::to_string(v) + ",";
+    return s + " n" + std::to_string(o.samples);
+}
+static void test_probe_opts() {
+    ProbeOpts d = ProbeOpts::from(Params());
+    CHECK(d.stride.size() == 19 && d.stride.front() == 64 && d.stride[4] == 1024 && d.stride.back() == 16u << 20 &&
+              d.samples == 20000,
+          "probe defaults changed: %s", probe_sig(d).c_str());
+    Params p;
+    p.m = {{"stride", "4K, 64K"}, {"samples", "10"}};
+    CHECK(probe_sig(ProbeOpts::from(p)) == "st4096,65536, n1000", "probe options misparsed: %s",
+          probe_sig(ProbeOpts::from(p)).c_str());
+    check_opts_keys("Probe", ProbeOpts::keys(), {{"samples", "5000"}, {"stride", "4K"}},
+                    [](const Params& q) { return probe_sig(ProbeOpts::from(q)); });
+}
+
 int main() {
     test_log.sink = [](const std::string& s) {
         printf("  (engine) %s", s.c_str());
@@ -581,6 +601,7 @@ int main() {
     test_chase_opts();
     test_rwstorm_opts();
     test_evolve_opts();
+    test_probe_opts();
     if (g_fail) {
         printf("%d check(s) FAILED\n", g_fail);
         return 1;

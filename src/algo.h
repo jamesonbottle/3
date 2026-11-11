@@ -166,4 +166,11 @@ struct EvolveOpts {
     static EvolveOpts from(const Params& P, const Logger& log);
 };
 
+struct ProbeOpts {
+    std::vector<u64> stride; // stride: address distances to time, bytes (default 64 B .. 16 MB)
+    u64 samples = 20000;     // samples per stride (>= 1000)
+    static const std::set<std::string>& keys();
+    static ProbeOpts from(const Params& P);
+};
+
 } // namespace ddr5

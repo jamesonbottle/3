@@ -13,6 +13,18 @@
 
 namespace ddr5 {
 
+// ------------------------------------------------------------------ options (the only place probe reads its keys)
+const std::set<std::string>& ProbeOpts::keys() {
+    static const std::set<std::string> k = {"samples", "stride"};
+    return k;
+}
+ProbeOpts ProbeOpts::from(const Params& P) {
+    ProbeOpts o;
+    o.stride = P.nums("stride", "64 128 256 512 1K 2K 4K 8K 16K 32K 64K 128K 256K 512K 1M 2M 4M 8M 16M");
+    o.samples = std::max<u64>(1000, P.num("samples", 20000));
+    return o;
+}
+
 // ------------------------------------------------------------------ algo: probe (row-hit vs row-conflict latency by
 // address distance) Informational, not pass/fail. Reads line A, then times a read of line B = A + stride (both flushed
 // from cache first). B in the same bank but a different row => row conflict (PRE + ACT + CAS: ~tRP + tRCD + CL),
@@ -20,8 +32,8 @@ namespace ddr5 {
 // bits feed the bank function, and (slow - fast) approximates tRP + tRCD as seen from the core (includes noise, so
 // treat as +-several ns).
 void algo_probe(Run& R, const Params& P) {
-    auto strides = P.nums("stride", "64 128 256 512 1K 2K 4K 8K 16K 32K 64K 128K 256K 512K 1M 2M 4M 8M 16M");
-    u64 samples = std::max<u64>(1000, P.num("samples", 20000));
+    const ProbeOpts opt = ProbeOpts::from(P);
+    const std::vector<u64>& strides = opt.stride;
     R.parallel([&](int tid) {
         if (tid != 0)
             return; // single thread, rest idle, so measurements are clean
@@ -52,7 +64,7 @@ void algo_probe(Run& R, const Params& P) {
             if (sl + 2 >= c.lines)
                 continue;
             R.set_label("probe stride " + std::to_string(strides[si]) + "B");
-            for (u64 k = 0; k < samples && !R.stop; k++) {
+            for (u64 k = 0; k < opt.samples && !R.stop; k++) {
                 rng = splitmix(rng);
                 u64 bl = rng % (c.lines - sl - 1);
                 const u8* A = c.base + bl * 64;
