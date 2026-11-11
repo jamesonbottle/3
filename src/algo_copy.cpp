@@ -66,7 +66,7 @@ void algo_copy(Run& R, const Params& P) {
                 } else
                     for (size_t k = 0; k < nb; k += 32)
                         _mm256_stream_si256((__m256i*)(d + k), _mm256_load_si256((const __m256i*)(s + k)));
-                R.progress.done.fetch_add(bl * 64 * 2, std::memory_order_relaxed);
+                R.add_done(bl * 64 * 2);
             }
             _mm_sfence();
             R.sync();

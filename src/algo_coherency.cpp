@@ -67,7 +67,7 @@ void algo_coherency(Run& R, const Params& P) {
                         a.w[0] = sum & 0xFF;
                         R.report(tid, mem + tid, e, a, "coherency", false);
                     }
-                    R.progress.done.fetch_add(inc * 8, std::memory_order_relaxed);
+                    R.add_done(inc * 8);
                 }
                 R.sync();
                 if (tid == 0)

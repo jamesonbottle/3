@@ -78,7 +78,7 @@ void algo_hammer(Run& R, const Params& P) {
                         j.g->make(w.g + i, ag[k], false, l);
                         io::store(ag[k], l);
                     }
-                    R.progress.done.fetch_add(acts * j.A * 64, std::memory_order_relaxed);
+                    R.add_done(acts * j.A * 64);
                 }
             }
             R.sync();

@@ -74,43 +74,40 @@ struct Progress {
 // Error reporting: the log file, the "first error" times, the counters. `mu` serializes Run::report and also guards
 // Run::label (the status line reads it from the GUI thread).
 struct ErrorSink {
-    std::mutex mu;
+    mutable std::mutex mu; // mutable: Run::status() is const but has to lock it
     FILE* logf = nullptr;
     u64 logged = 0;
     double firstErrRun = -1, firstErrTest = -1; // seconds into the run / the current test; -1 = no error yet
     std::atomic<u64> errTotal{0};
 };
 
+struct Run;
+struct Settings;
+int run_suite(const Settings& s, Run& R); // suite.h: the one function besides Run's own methods that drives a Run
+
+// The state of one run of the suite, in three parts:
+//  - the algo-facing part (public, first): what algo_*.cpp may use. The data members are read-only for the algos
+//    (run_suite sets them before the tests start); they reach the shared counters only through the methods.
+//  - the front-end part (public, `Status` and below): what a GUI/CLI needs to follow a run from another thread.
+//  - everything else is private; run_suite is the only outside code that writes it (friend).
 struct Run {
+    // ---- algo-facing: data (read-only for the algos)
     const Logger& log; // where output goes; owned by the front-end, must outlive the Run
     explicit Run(const Logger& l) : log(l) {}
-    Cfg cfg;
     u64 salt = 0; // from the run seed and the loop number (run_suite sets it per loop): every random choice is a
                   // function of it
     int rng = 0;  // hash mixer chosen in Settings (0 splitmix64, 1 murmur3 fmix64, 2 xorshift64*); see mix64()
     Layout layout;
-    Progress progress;
-    ErrorSink errors;
-    std::atomic<bool> stop{false};
-    Stats st, total;
-    std::barrier<>* bar = nullptr;
-    std::string label, testName;
-    std::map<std::string, u64> winctr;
-    std::atomic<bool> running{false};
-
+    std::string testName;              // the running test; also the key into winctr
+    std::map<std::string, u64> winctr; // per test name: how many windows earlier loops have used (rotates the windows)
+    std::atomic<bool> stop{false};     // set by a front-end (Stop button, Ctrl-C), by report() on the first error in
+                                       // stop-on-error mode, and by parallel() when a stop criterion is reached
+    // ---- algo-facing: methods
     // call once per verified 64B line; flushes to the shared counters every 64K lines per thread, and once more when
     // the thread ends (parallel() calls vflush), so the lines counted since the last 64K boundary are not lost
     void vtick() {
         if (++t_vcount >= 0x10000)
             vflush();
-    }
-    void vflush() {
-        u64 c = t_vcount;
-        t_vcount = 0;
-        if (c) {
-            progress.vbytes.fetch_add(c * 64, std::memory_order_relaxed);
-            progress.vtotal.fetch_add(c * 64, std::memory_order_relaxed);
-        }
     }
     void sync() { bar->arrive_and_wait(); }
     void set_label(const std::string& s) {
@@ -118,6 +115,7 @@ struct Run {
         label = s;
     }
     void tick() { progress.done.fetch_add(0x10000ull * 64, std::memory_order_relaxed); }
+    void add_done(u64 bytes) { progress.done.fetch_add(bytes, std::memory_order_relaxed); } // bytes moved, for GB/s
     // Window `ctr` of the thread's chunk. ceil(lines / wl) windows rotate; the last one is shifted back so it ends
     // exactly at the chunk end (it overlaps the previous window instead of leaving a never-tested tail).
     View view(int tid, u64 wl, u64 ctr) const {
@@ -155,6 +153,42 @@ struct Run {
     template <class F>
     void parallel(F fn);
     void report(int tid, const u8* addr, const Line& e, const Line& a, const char* phase, bool reread = true);
+
+    // ---- front-end: follow a run from another thread
+    struct Status {
+        double tStart;     // plat::now() when the run started; 0 while the memory is still being allocated
+        u64 regionBytes;   // size of the tested region; 0 before it is allocated
+        u64 vtotal;        // bytes verified so far in the whole run (coverage = vtotal / regionBytes)
+        u64 errors;        // bad lines so far
+        std::string label; // the running test
+    };
+    Status status() const {
+        Status s{progress.tStart, layout.regionBytes, progress.vtotal.load(), errors.errTotal.load(), {}};
+        std::lock_guard<std::mutex> l(errors.mu);
+        s.label = label;
+        return s;
+    }
+    u64 error_count() const { return errors.errTotal.load(); }
+
+  private:
+    friend int run_suite(const Settings& s, Run& R);
+    void vflush() {
+        u64 c = t_vcount;
+        t_vcount = 0;
+        if (c) {
+            progress.vbytes.fetch_add(c * 64, std::memory_order_relaxed);
+            progress.vtotal.fetch_add(c * 64, std::memory_order_relaxed);
+        }
+    }
+
+    Cfg cfg;
+    Progress progress;
+    ErrorSink errors;
+    Stats st, total;               // this test's / the whole run's error statistics
+    std::barrier<>* bar = nullptr; // the barrier of the parallel() in progress (sync() waits on it)
+    std::string label;             // the running test's name for the status line; guarded by errors.mu
+    std::atomic<bool> running{
+        false}; // set by run_suite around a run (nothing reads it yet, see MODERNIZE.md parking lot)
 };
 
 template <class F>

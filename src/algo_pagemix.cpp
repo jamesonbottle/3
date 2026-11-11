@@ -171,7 +171,7 @@ void algo_pagemix(Run& R, const Params& P) {
                 else
                     pm_copy<0>(R, tid, sa, da, sg, sq.inv);
                 pp[d] = sq;
-                R.progress.done.fetch_add(8192, std::memory_order_relaxed);
+                R.add_done(8192);
             } else if (op == 6) {
                 PagePat nq = pick(nx());
                 Gen ng = gen(nq);
@@ -180,19 +180,19 @@ void algo_pagemix(Run& R, const Params& P) {
                 else
                     pm_fill<0>(sa, ng, nq.inv);
                 pp[s] = nq;
-                R.progress.done.fetch_add(4096, std::memory_order_relaxed);
+                R.add_done(4096);
             } else if (op <= 8) {
                 if (fl)
                     pm_invert<1>(sa);
                 else
                     pm_invert<0>(sa);
-                R.progress.done.fetch_add(4096 * 4, std::memory_order_relaxed);
+                R.add_done(4096 * 4);
             } else {
                 if (fl)
                     pm_check<1>(R, tid, sa, sg, sq.inv, "pagemix-check");
                 else
                     pm_check<0>(R, tid, sa, sg, sq.inv, "pagemix-check");
-                R.progress.done.fetch_add(4096, std::memory_order_relaxed);
+                R.add_done(4096);
             }
             if (two)
                 busy[d].store(0, std::memory_order_release);

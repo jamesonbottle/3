@@ -26,7 +26,7 @@ struct Settings {
 };
 
 std::string suite_text(); // the built-in suite.cfg text (compiled in, see suite_data.h)
-// Runs the built-in suite until finished or R.stop. Poll R (vtotal, errTotal, label, tStart, ...) from another thread.
+// Runs the built-in suite until finished or R.stop. Follow it from another thread with R.status() / R.error_count().
 int run_suite(const Settings& s, Run& R);
 
 } // namespace ddr5

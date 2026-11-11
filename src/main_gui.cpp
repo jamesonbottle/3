@@ -151,15 +151,16 @@ void refresh() {
         return;
     Run& R = *A.run;
     bool busy = A.busy.load();
-    double t = R.progress.tStart > 0 ? (busy ? plat::now() : A.endT) - R.progress.tStart : 0;
+    const Run::Status S = R.status();
+    double t = S.tStart > 0 ? (busy ? plat::now() : A.endT) - S.tStart : 0;
     if (t < 0)
         t = 0;
     u64 s = (u64)t;
     setText(A.hDur,
             std::to_wstring(s / 86400) + L":" + two(s / 3600 % 24) + L":" + two(s / 60 % 60) + L":" + two(s % 60));
-    double cov = R.layout.regionBytes ? 100.0 * (double)R.progress.vtotal.load() / (double)R.layout.regionBytes : 0.0;
+    double cov = S.regionBytes ? 100.0 * (double)S.vtotal / (double)S.regionBytes : 0.0;
     setText(A.hCov, std::to_wstring((u64)cov) + L" %");
-    u64 err = R.errors.errTotal.load();
+    u64 err = S.errors;
     setText(A.hErr, std::to_wstring(err));
     if (err != A.lastErr) {
         if (err > A.lastErr && SendMessageW(A.hBeep, BM_GETCHECK, 0, 0) == BST_CHECKED)
@@ -167,14 +168,10 @@ void refresh() {
         A.lastErr = err;
         InvalidateRect(A.hErr, nullptr, TRUE);
     }
-    std::string lab;
-    {
-        std::lock_guard<std::mutex> l(R.errors.mu);
-        lab = R.label;
-    }
+    const std::string& lab = S.label;
     if (busy)
-        setText(A.hTest, R.progress.tStart > 0 ? std::wstring(lab.begin(), lab.end()) : L"Allocating memory...");
-    else if (!A.stopRequested && err == 0 && R.progress.tStart > 0)
+        setText(A.hTest, S.tStart > 0 ? std::wstring(lab.begin(), lab.end()) : L"Allocating memory...");
+    else if (!A.stopRequested && err == 0 && S.tStart > 0)
         setText(A.hTest, L"Finished");
 }
 
@@ -313,7 +310,7 @@ void on_run_done(int rc) {
     }
     set_running_ui(false);
     refresh();
-    if (A.run && A.run->errors.errTotal.load() > 0)
+    if (A.run && A.run->error_count() > 0)
         setText(A.hTest, A.stopRequested   ? L"Stopped (errors found)"
                          : A.logWhere == 0 ? L"Errors found - see ddr5ramtest.log"
                          : A.logWhere == 1 ? L"Errors found - log is in %TEMP%"
