@@ -46,7 +46,7 @@ Windows cannot be built in this environment. Windows-only files can be compile-c
 | M4 | Fault-injection hooks out of the algorithms (point 6) | done |
 | M5 | Remove global mutable state (point 1), sub-steps 5a-5c | done |
 | M6 | Split up `Run` (point 3) | done |
-| M7 | Typed, validated test parameters (point 4), sub-steps 7a-7j | partial (7a-7e done) |
+| M7 | Typed, validated test parameters (point 4), sub-steps 7a-7j | partial (7a-7f done) |
 | M8 | Test runner: CTest (+ optional framework) (point 7) | todo |
 
 Order matters: M1 first so later diffs are in the final style; M2 before M5/M6 so new types land in the namespace; M5 before M6 and M7.
@@ -126,7 +126,8 @@ Why: `Params` is `map<string,string>`; a misspelled key in `suite.cfg` is silent
 - [x] **7c `MarchOpts`** (march).
 - [x] **7d `HammerOpts`** (hammer).
 - [x] **7e `CopyOpts`** (copy).
-- [ ] **7f-7j Typed structs, one algo per commit**: chase, rwstorm, evolve, probe, pagemix, coherency. Each gets `struct XOpts { ... static XOpts from(const Params&); }` parsed once before `R.parallel`; the algo body uses fields only. Defaults must equal the current `P.num("key", default)` values.
+- [x] **7f `ChaseOpts`** (chase).
+- [ ] **7g-7j Typed structs, one algo per commit**: rwstorm, evolve, probe, pagemix, coherency. Each gets `struct XOpts { ... static XOpts from(const Params&); }` parsed once before `R.parallel`; the algo body uses fields only. Defaults must equal the current `P.num("key", default)` values.
 - [ ] Remove the now-unused `Params` accessors only after the last algo is converted.
 
 Done when: no `P.num/P.str/P.flag/P.words/P.nums` call remains inside an `algo_*.cpp` (only in the `from()` functions); a misspelled key fails `tools/selftest.sh`; gate passes.
@@ -170,3 +171,4 @@ Done when: `ctest` runs both and passes; gate passes.
 - 2026-11-11 M7c done. `MarchOpts` (`algo.h`, `from()`/`keys()` in `algo_march.cpp`): `march burst order width nt flush` (+ `stride` via `stride_list`) parsed once before `R.parallel`; no `P.num/str/flag/words/nums` left in `algo_march`. Ordering kept: when `march` has no elements `from()` returns right after the march parse, so a bad `order` is still not reported before "march: no elements". The typed-options section of `algo.h` moved to the end of the file (it needs `MVar`); `FillOpts` moved with it. `unit_tests.cpp`: the "every listed key changes the result" check is now one helper (`check_opts_keys`, with an optional base config) used by fill and march; new `test_march_opts`. Gate green: 54 PASS, 0 FAIL, 0 warnings, format clean. Next: 7d (`HammerOpts`).
 - 2026-11-11 M7d done. `HammerOpts` (`rowstride aggressors acts rounds`; `from(P)` has no log because hammer reports nothing while parsing). No built-in test uses hammer, so besides the gate I built the old (HEAD) and new engine in scratch copies with an extra `[test] algo = hammer` block (`rowstride = 64K`, `aggressors = 2`, `acts = 2000`, `rounds = 2`, `window_mb = 16`) and ran both with `--seed 0x1234`: exit 0 and identical output apart from the free-RAM line. New `test_hammer_opts`. Gate green: 54 PASS, 0 FAIL, 0 warnings, format clean. Next: 7e (`CopyOpts`).
 - 2026-11-11 M7e done. `CopyOpts` (`method block`; `from(P)`): method words keep their case (the label prints them, the job lowercases them as before), `block` clamps to >= 64. New `test_copy_opts`. Covered by the self-test ("Bulk copy" clean run, coverage-counter and seed-reproduction checks). Gate green: 54 PASS, 0 FAIL, 0 warnings, format clean. Next: 7f (`ChaseOpts`).
+- 2026-11-11 M7f done. `ChaseOpts` (`mlp seeds`; `from(P)`): the empty-`mlp` fallback to {12} and the `seeds >= 1` clamp are in `from()`; only the setup code of `algo_chase` changed, the chain build/walk loops are untouched. New `test_chase_opts`. Covered by the self-test ("Pointer chase" clean run). Gate green: 54 PASS, 0 FAIL, 0 warnings, format clean. Next: 7g (`RwstormOpts`).

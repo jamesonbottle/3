@@ -489,6 +489,27 @@ static void test_copy_opts() {
                     [](const Params& q) { return copy_sig(CopyOpts::from(q)); });
 }
 
+// ChaseOpts::from(): defaults, the empty-list fallback and the seeds clamp.
+static std::string chase_sig(const ChaseOpts& o) {
+    std::string s = "mlp";
+    for (u64 v : o.mlp)
+        s += std::to_string(v) + ",";
+    return s + " seeds" + std::to_string(o.seeds);
+}
+static void test_chase_opts() {
+    CHECK(chase_sig(ChaseOpts::from(Params())) == "mlp12, seeds2", "chase defaults changed: %s",
+          chase_sig(ChaseOpts::from(Params())).c_str());
+    Params p;
+    p.m = {{"mlp", "4 16"}, {"seeds", "0"}};
+    CHECK(chase_sig(ChaseOpts::from(p)) == "mlp4,16, seeds1", "chase options misparsed: %s",
+          chase_sig(ChaseOpts::from(p)).c_str());
+    Params e;
+    e.m = {{"mlp", ""}};
+    CHECK(chase_sig(ChaseOpts::from(e)) == "mlp12, seeds2", "an empty mlp list must fall back to 12");
+    check_opts_keys("Chase", ChaseOpts::keys(), {{"mlp", "4"}, {"seeds", "5"}},
+                    [](const Params& q) { return chase_sig(ChaseOpts::from(q)); });
+}
+
 int main() {
     test_log.sink = [](const std::string& s) {
         printf("  (engine) %s", s.c_str());
@@ -505,6 +526,7 @@ int main() {
     test_march_opts();
     test_hammer_opts();
     test_copy_opts();
+    test_chase_opts();
     if (g_fail) {
         printf("%d check(s) FAILED\n", g_fail);
         return 1;

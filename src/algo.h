@@ -135,4 +135,11 @@ struct CopyOpts {
     static CopyOpts from(const Params& P);
 };
 
+struct ChaseOpts {
+    std::vector<u64> mlp = {12}; // mlp: independent chains per thread (never empty; each >= 1 when used)
+    u64 seeds = 2;               // seeds: chain layouts per mlp value (>= 1)
+    static const std::set<std::string>& keys();
+    static ChaseOpts from(const Params& P);
+};
+
 } // namespace ddr5

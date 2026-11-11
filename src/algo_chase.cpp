@@ -13,24 +13,37 @@
 
 namespace ddr5 {
 
+// ------------------------------------------------------------------ options (the only place chase reads its keys)
+// `window_mb` (Run::window_lines) belongs to a shared helper; chase has no data variants.
+const std::set<std::string>& ChaseOpts::keys() {
+    static const std::set<std::string> k = {"mlp", "seeds"};
+    return k;
+}
+ChaseOpts ChaseOpts::from(const Params& P) {
+    ChaseOpts o;
+    o.mlp = P.nums("mlp", "12");
+    if (o.mlp.empty())
+        o.mlp.push_back(12);
+    o.seeds = std::max<u64>(1, P.num("seeds", 2));
+    return o;
+}
+
 // ------------------------------------------------------------------ algo: chase (random pointer chase, K independent
 // chains = max bank-level parallelism)
 void algo_chase(Run& R, const Params& P) {
-    auto mlps = P.nums("mlp", "12");
-    if (mlps.empty())
-        mlps.push_back(12);
-    u64 seeds = std::max<u64>(1, P.num("seeds", 2)), wl = R.window_lines(P);
+    const ChaseOpts opt = ChaseOpts::from(P);
+    u64 wl = R.window_lines(P);
     u64 base = R.winctr[R.testName];
-    R.winctr[R.testName] += seeds * mlps.size();
+    R.winctr[R.testName] += opt.seeds * opt.mlp.size();
     R.parallel([&](int tid) {
-        for (u64 sd = 0; sd < seeds; sd++)
-            for (size_t mi = 0; mi < mlps.size(); mi++) {
+        for (u64 sd = 0; sd < opt.seeds; sd++)
+            for (size_t mi = 0; mi < opt.mlp.size(); mi++) {
                 if (R.stop)
                     break;
-                u64 K = std::max<u64>(1, mlps[mi]);
+                u64 K = std::max<u64>(1, opt.mlp[mi]);
                 if (tid == 0)
                     R.set_label("chase seed " + std::to_string(sd) + " mlp=" + std::to_string(K));
-                View w = R.view(tid, wl, base + sd * mlps.size() + mi);
+                View w = R.view(tid, wl, base + sd * opt.mlp.size() + mi);
                 Order o;
                 u64 seed = splitmix(sd * 31 + tid + R.salt + mi * 977), salt = splitmix(seed ^ 0x5A5A);
                 o.init(Order::RANDOM, w.n, 1, seed, R.salt);
