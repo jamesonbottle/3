@@ -7,6 +7,10 @@
 #include <functional>
 #include <map>
 #include <sstream>
+#include <thread>
+#include <mutex>
+#include <atomic>
+#include <chrono>
 #include "algo.h"
 #include "gen.h"
 #include "log.h"
@@ -712,6 +716,61 @@ static void test_values() {
     }
 }
 
+// Run lifecycle seen from the front-end side: status() may be polled from another thread while run_suite works (the GUI
+// does exactly this; run it under TSan, see S12), and a Stop that arrives before the run starts must not be lost.
+static void test_run_status() {
+    Settings st;
+    st.megabytes = 8;
+    st.threads = 2;
+    st.largePages = false;
+    st.filter = "Bulk copy";
+    st.loops = 1; // 0 would mean "until stopped"
+    st.testSeconds = 1;
+    st.seedSet = true;
+    st.seed = 1;
+    std::mutex mu;
+    std::string text;
+    Logger lg;
+    lg.sink = [&](const std::string& t) {
+        std::lock_guard<std::mutex> l(mu);
+        text += t;
+    };
+    {
+        Run R(lg);
+        std::atomic<bool> done{false};
+        int rc = -1;
+        std::thread worker([&] {
+            rc = run_suite(st, R);
+            done = true;
+        });
+        bool sawRegion = false, sawStart = false;
+        u64 lastV = 0;
+        while (!done) {
+            Run::Status s = R.status();
+            sawRegion = sawRegion || s.regionBytes > 0;
+            sawStart = sawStart || s.tStart > 0;
+            CHECK(s.vtotal >= lastV, "coverage counter went backwards");
+            lastV = s.vtotal;
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+        worker.join();
+        Run::Status f = R.status();
+        CHECK(rc == 0, "run_suite on a clean run must return 0, got %d", rc);
+        CHECK(f.regionBytes == (8ull << 20) && f.tStart > 0 && f.errors == 0,
+              "final status wrong: region %llu start %.2f errors %llu", (unsigned long long)f.regionBytes, f.tStart,
+              (unsigned long long)f.errors);
+        CHECK(sawRegion || sawStart || f.regionBytes, "status never showed the run");
+    }
+    {
+        text.clear();
+        Run R(lg);
+        R.stop = true; // Stop pressed while the run is still starting up
+        int rc = run_suite(st, R);
+        CHECK(rc == 0, "run_suite with stop already set must return 0, got %d", rc);
+        CHECK(text.find("[loop") == std::string::npos, "a Stop requested before the start was lost: a test ran");
+    }
+}
+
 int main() {
     test_log.sink = [](const std::string& s) {
         printf("  (engine) %s", s.c_str());
@@ -725,6 +784,7 @@ int main() {
     test_suite_parses();
     test_suite_keys();
     test_values();
+    test_run_status();
     test_fill_opts();
     test_march_opts();
     test_hammer_opts();

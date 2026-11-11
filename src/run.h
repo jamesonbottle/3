@@ -56,9 +56,9 @@ inline thread_local u64 t_vcount =
 // test starts; the algos only read it.
 struct Layout {
     u8* region = nullptr;
-    u64 regionBytes = 0;
-    int T = 1;                 // worker threads
-    std::vector<Chunk> chunks; // one per thread
+    std::atomic<u64> regionBytes{0}; // set once by run_suite (release); the GUI reads it through Run::status()
+    int T = 1;                       // worker threads
+    std::vector<Chunk> chunks;       // one per thread
 };
 
 // How far the run has got: the byte counters the workers bump, the clocks, and the user's stop criteria.
@@ -66,9 +66,10 @@ struct Progress {
     std::atomic<u64> done{0}; // bytes moved in the current test (drives the GB/s figure)
     // coverage (HCI/Karhu-style: how many times the tested region has been verified): this test / the whole run
     std::atomic<u64> vbytes{0}, vtotal{0};
-    double tStart = 0, tTestStart = 0; // plat::now() at the start of the run / of the current test
-    u64 stopCoverage = 0;              // stop once vtotal reaches this many percent of the region (0 = off)
-    double stopSeconds = 0;            // stop after this many seconds (0 = off)
+    std::atomic<double> tStart{0}; // plat::now() at the start of the run; set once by run_suite, read by Run::status()
+    double tTestStart = 0;         // plat::now() at the start of the current test
+    u64 stopCoverage = 0;          // stop once vtotal reaches this many percent of the region (0 = off)
+    double stopSeconds = 0;        // stop after this many seconds (0 = off)
     std::string stopReason;
 };
 
@@ -96,11 +97,12 @@ int run_suite(const Settings& s, Run& R); // suite.h: the one function besides R
 // a front-end makes a fresh Run per Start (the GUI) or has a single one (the CLI).
 //  - The front-end owns the Run and the Logger it refers to, and keeps both alive until run_suite returns. The GUI
 //    runs run_suite on a worker thread and follows it from the UI thread through status() / error_count().
-//  - run_suite owns the setup: it fills in cfg, rng, salt, testName, layout and progress, clears `stop` before the
-//    first test, and opens and closes errors.logf (CLI only; the GUI's Logger sink writes the log itself).
-//  - `stop` may be set by anyone: a front-end (Stop button, Ctrl-C), report() on the first error in stop-on-error
-//    mode, parallel() when a stop criterion (coverage or time) is reached. Only run_suite clears it, once, at the
-//    start.
+//  - run_suite owns the setup: it fills in cfg, rng, salt, testName, layout and progress, and opens and closes
+//    errors.logf (CLI only; the GUI's Logger sink writes the log itself). The fields status() reads from another
+//    thread (layout.regionBytes, progress.tStart) are atomics that run_suite stores with release order.
+//  - `stop` may be set by anyone, at any time, even before run_suite starts (a Stop that arrives early must not be
+//    lost): a front-end (Stop button, Ctrl-C), report() on the first error in stop-on-error mode, parallel() when a
+//    stop criterion (coverage or time) is reached. Nobody clears it: a Run serves exactly one run_suite call.
 //  - report() is called by the worker threads; under errors.mu it updates the error counters, the "first error" times
 //    and errors.logf. parallel() sets `bar` for its duration and joins every worker before it returns.
 //  - A Run is neither copyable nor movable: the workers, the barrier and the front-end all hold its address.
@@ -179,7 +181,11 @@ struct Run {
         std::string label; // the running test
     };
     Status status() const {
-        Status s{progress.tStart, layout.regionBytes, progress.vtotal.load(), errors.errTotal.load(), {}};
+        Status s{progress.tStart.load(std::memory_order_acquire),
+                 layout.regionBytes.load(std::memory_order_acquire),
+                 progress.vtotal.load(),
+                 errors.errTotal.load(),
+                 {}};
         std::lock_guard<std::mutex> l(errors.mu);
         s.label = label;
         return s;

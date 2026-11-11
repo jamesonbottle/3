@@ -27,7 +27,7 @@ Dependencies: S9 (split `run_suite`) comes after S1 (RAII) and S8 (enums). Both 
 | S3  | Progress line error count     | Reliability | High     | DONE   |
 | S4  | `report()` hardening          | Rel + Perf  | Low      | TODO   |
 | S5  | Input value validation        | Reliability | Medium   | DONE   |
-| S6  | `status()` race + Ctrl-C      | Reliability | Medium   | TODO   |
+| S6  | `status()` race + Ctrl-C      | Reliability | Medium   | DONE   |
 | S7  | Platform robustness           | Reliability | Medium   | TODO   |
 | S8  | Enums and named constants     | Readability | Low      | TODO   |
 | S9  | Split `run_suite`             | Readability | Low      | TODO   |
@@ -45,6 +45,7 @@ Dependencies: S9 (split `run_suite`) comes after S1 (RAII) and S8 (enums). Both 
 | 2026-11-12 | S3      | DONE: progress line prints the run total plus `(this test N)` (`src/run.h`) |
 | 2026-11-12 | S2      | DONE: `Settings::logFileSet`; log opened before the allocation; explicit `--log` that cannot be opened -> exit 2, default name -> warning; README + `--help` updated; selftest group 2d |
 | 2026-11-12 | S5      | DONE: strict `pnum_checked`, bad values recorded and reported by `bad_values()`, `run_suite` refuses to start (exit 2); unit tests for 16 bad / 10 good number forms, flags, the whole suite and 10 planted mistakes |
+| 2026-11-12 | S6      | DONE: atomics for the fields `status()` reads, no `R.stop = false`, double Ctrl-C (POSIX `SA_RESETHAND`, Windows `ExitProcess(130)`), README and `--help` updated, unit test for the status poll and for an early Stop |
 
 ---
 
@@ -186,7 +187,7 @@ Cause: in `src/algo_evolve.cpp` the verify walk runs right after the rewrite pas
 
 ## S6. `Run::status()` data race, lost Stop, and Ctrl-C behavior
 
-**Status:** TODO
+**Status:** DONE (2026-11-12). `layout.regionBytes` and `progress.tStart` are atomics (release store in `run_suite`, acquire load in `status()`); `R.stop = false` removed; POSIX uses `sigaction` + `SA_RESETHAND` (second Ctrl-C kills with 130), Windows counts hits and calls `ExitProcess(130)` (read only, not compiled here). `test_run_status` in `tools/unit_tests.cpp` polls `status()` during `run_suite` and checks a pre-set Stop is honored; it is clean under TSan (0 warnings) and fails if `R.stop = false` is put back. S12 can reuse it for the TSan leg.
 
 **Problem**
 - The GUI thread reads `layout.regionBytes` and `progress.tStart` (plain fields) through `Run::status()` while `run_suite` writes them from the worker thread. Benign on x86, formally UB. These are the only cross-thread plain reads: `main_gui.cpp` touches the `Run` only via `status()`, `error_count()` and `stop`.

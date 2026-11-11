@@ -32,6 +32,8 @@ static void usage() {
          "             [--keep-going | --stop-on-error] [--no-large-pages] [--log FILE] [--list]\n"
          "             (--log FILE that cannot be opened = exit 2; the default ddr5test.log that cannot be opened only "
          "warns)\n"
+         "Ctrl-C stops the run after the current step and prints the summary; a second Ctrl-C ends the process at "
+         "once\n"
          "exit code: 0 = no errors, 1 = memory errors found, 2 = could not start (bad option / log file / not enough "
          "memory), 3 = "
          "internal error");

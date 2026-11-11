@@ -16,7 +16,13 @@ namespace ddr5 {
 namespace plat {
 static std::atomic<bool>* g_stop = nullptr;
 
+static std::atomic<int> g_hits{0};
+
+// First Ctrl-C: ask the run to stop. A second one ends the process at once (a wedged run could not be stopped
+// otherwise); 130 = the usual exit status after SIGINT.
 static BOOL WINAPI ctrl(DWORD) {
+    if (g_hits.fetch_add(1) >= 1)
+        ExitProcess(130);
     if (g_stop)
         g_stop->store(true);
     return TRUE;

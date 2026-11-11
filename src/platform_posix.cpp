@@ -4,6 +4,7 @@
 #define _GNU_SOURCE // CPU_SET / pthread_setaffinity_np
 #endif
 #include <csignal>
+#include <cstring>
 #include <pthread.h>
 #include <sched.h>
 #include <sys/mman.h>
@@ -16,13 +17,20 @@ namespace ddr5 {
 namespace plat {
 static std::atomic<bool>* g_stop = nullptr;
 
-static void ctrl(int) {
+static void ctrl(int) { // async-signal-safe: one atomic store
     if (g_stop)
         g_stop->store(true);
 }
+// First Ctrl-C: ask the run to stop (it ends the current test and prints the summary). SA_RESETHAND puts the default
+// action back as soon as the handler has been entered, so a second Ctrl-C kills the process even if a run is wedged.
 void install_ctrlc(std::atomic<bool>* s) {
     g_stop = s;
-    std::signal(SIGINT, ctrl);
+    struct sigaction sa;
+    std::memset(&sa, 0, sizeof sa);
+    sa.sa_handler = ctrl;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = SA_RESETHAND;
+    sigaction(SIGINT, &sa, nullptr);
 }
 int ncpu() {
     return (int)std::thread::hardware_concurrency();

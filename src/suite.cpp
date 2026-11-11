@@ -136,7 +136,6 @@ int run_suite(const Settings& s, Run& R) {
         R.layout.T = cfg.threads > 0 ? cfg.threads : std::max(1, plat::ncpu());
         R.progress.stopCoverage = s.coverageStop;
         R.progress.stopSeconds = s.minutes * 60.0;
-        R.stop = false;
         const u64 MB2 = 2ull << 20;
         u64 avail = plat::avail_phys(), want;
         if (s.megabytes)
@@ -166,7 +165,7 @@ int run_suite(const Settings& s, Run& R) {
             close_log();
             return 2;
         }
-        R.layout.regionBytes = total;
+        R.layout.regionBytes.store(total, std::memory_order_release);
         R.log.emitf("memory %s, large pages: %s\n",
                     locked ? "locked"
                            : "NOT locked (the OS may page parts of it out; close other programs or lower Megabytes)",
@@ -188,7 +187,7 @@ int run_suite(const Settings& s, Run& R) {
                 fpu.emplace_back(fpu_stress, std::ref(fpuStop));
 
         double t0 = plat::now();
-        R.progress.tStart = t0;
+        R.progress.tStart.store(t0, std::memory_order_release);
         int failedTests = 0;
         std::vector<std::string> failedNames;
         for (u64 loop = 1; (!cfg.loops || loop <= cfg.loops) && !R.stop; loop++) {
