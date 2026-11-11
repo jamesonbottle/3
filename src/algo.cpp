@@ -67,4 +67,66 @@ const std::map<std::string, AlgoFn>& algos() {
     return table;
 }
 
+// ------------------------------------------------------------------ the keys each algo understands
+// Everything the algo_*.cpp (and the helpers it calls) reads from Params: build_vars() for the data keys, stride_list()
+// for `stride`, Run::window_lines() for `window_mb`, ospec() for `order`/`verify_order`. A key in suite.cfg that is not
+// listed here would be ignored without a word, so run_suite reports it and the unit tests fail on it. Keep this table
+// in step with the P.* reads until M7b-7j replace it with the typed XOpts::from() functions.
+using Keys = std::set<std::string>;
+static Keys keys_of(std::initializer_list<Keys> parts) {
+    Keys all;
+    for (const Keys& p : parts)
+        all.insert(p.begin(), p.end());
+    return all;
+}
+const Keys& algo_keys(const std::string& algo) {
+    static const Keys none;
+    static const Keys common = {"algo", "quick", "enabled"};
+    static const Keys data = {"data",    "seed",    "seeds",    "sat_width", "style",
+                              "victims", "pattern", "altshift", "modulo"};
+    static const Keys window = {"window_mb"};
+    static const Keys stride = {"stride"};
+    static const std::map<std::string, Keys> table = {
+        {"fill", keys_of({common, data, window, stride,
+                          Keys{"both", "cross", "disturb", "disturb_passes", "dwell_ms", "flush", "nt", "order",
+                               "reads", "verify_order", "width"}})},
+        {"march", keys_of({common, data, window, stride, Keys{"burst", "flush", "march", "nt", "order", "width"}})},
+        {"evolve", keys_of({common, data, window, stride,
+                            Keys{"cross", "flush", "nt", "order", "passes", "period", "verify_order", "width"}})},
+        {"rwstorm",
+         keys_of({common, data, window, stride, Keys{"flush", "nt", "order", "passes", "verify_order", "width"}})},
+        {"copy", keys_of({common, data, window, Keys{"block", "method"}})},
+        {"hammer", keys_of({common, data, window, Keys{"acts", "aggressors", "rounds", "rowstride"}})},
+        {"chase", keys_of({common, window, Keys{"mlp", "seeds"}})},
+        {"probe", keys_of({common, Keys{"samples", "stride"}})},
+        {"pagemix", keys_of({common, Keys{"seconds"}})},
+        {"coherency", keys_of({common, Keys{"inc", "lines", "seconds"}})}};
+    auto i = table.find(algo);
+    return i == table.end() ? none : i->second;
+}
+
+// A key the test block set itself must be one its algo understands. A key inherited from [default] (width, flush)
+// reaches every test, so it only has to be understood by some algo.
+std::vector<std::string> unknown_keys(const TestDef& t) {
+    std::vector<std::string> bad;
+    std::string algo = lower(t.p.str("algo", "fill"));
+    if (!algos().count(algo))
+        return bad; // run_suite skips a test with an unknown algo; the unit tests check the algo names of the built-in
+                    // suite
+    const Keys& mine = algo_keys(algo);
+    for (const auto& kv : t.p.m) {
+        const std::string& k = kv.first;
+        bool ok = mine.count(k) > 0;
+        if (!ok && !t.own.count(k))
+            for (const auto& a : algos())
+                if (algo_keys(a.first).count(k)) {
+                    ok = true;
+                    break;
+                }
+        if (!ok)
+            bad.push_back(k);
+    }
+    return bad;
+}
+
 } // namespace ddr5

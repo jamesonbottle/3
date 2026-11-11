@@ -74,6 +74,16 @@ int run_suite(const Settings& s, Run& R) {
             std::istringstream is(suite_text());
             parse_cfg_stream(is, "<built-in suite>", cfg, tests, R.log);
         }
+        for (const TestDef& t :
+             tests) // keys no algo reads would be ignored silently: say so (a clean suite prints nothing)
+            for (const std::string& k : unknown_keys(t)) {
+                if (t.own.count(k))
+                    R.log.emitf("test '%s': key '%s' is not used by algo '%s' (ignored)\n", t.name.c_str(), k.c_str(),
+                                lower(t.p.str("algo", "fill")).c_str());
+                else
+                    R.log.emitf("test '%s': key '%s' (from [default]) is not used by any algo (ignored)\n",
+                                t.name.c_str(), k.c_str());
+            }
         cfg.threads = s.threads;
         cfg.large = s.largePages;
         cfg.stopOnErr = s.stopOnError;

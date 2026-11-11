@@ -2,6 +2,7 @@
 // params.h - string helpers, Params, suite.cfg parser.
 #include <istream>
 #include <map>
+#include <set>
 #include <string>
 #include <vector>
 #include "log.h"
@@ -44,7 +45,8 @@ struct Params {
 };
 struct TestDef {
     std::string name;
-    Params p;
+    Params p;                  // the [default] values, overridden by the keys of the [test] block
+    std::set<std::string> own; // keys the [test] block itself set (the rest of `p` was inherited from [default])
 };
 struct Cfg {
     u64 memPercent = 75, memMB = 0, marginMB = 768, loops = 1, maxLog = 200, cacheMB = 192;

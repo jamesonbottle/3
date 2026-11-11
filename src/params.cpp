@@ -68,8 +68,10 @@ bool parse_cfg_stream(std::istream& f, const std::string& path, Cfg& cfg, std::v
         if (line[0] == '[') {
             sect = lower(trim(line.substr(1, line.find(']') - 1)));
             if (sect == "test") {
-                tests.push_back({"test" + std::to_string(tests.size() + 1), defaults});
+                tests.emplace_back();
                 cur = &tests.back();
+                cur->name = "test" + std::to_string(tests.size());
+                cur->p = defaults;
             } else if (sect == "default") {
                 defaults = Params();
                 cur = nullptr;
@@ -110,8 +112,10 @@ bool parse_cfg_stream(std::istream& f, const std::string& path, Cfg& cfg, std::v
         else if (sect == "test" && cur) {
             if (k == "name")
                 cur->name = v;
-            else
+            else {
                 cur->p.m[k] = v;
+                cur->own.insert(k);
+            }
         }
     }
     return true;

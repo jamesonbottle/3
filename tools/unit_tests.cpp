@@ -272,6 +272,38 @@ static void test_suite_parses() {
     }
 }
 
+// A misspelled key in suite.cfg is ignored without a word, so every key of the built-in suite must be one its algo
+// reads, and the check itself must catch the usual mistakes.
+static void test_suite_keys() {
+    Cfg cfg;
+    std::vector<TestDef> tests;
+    std::istringstream is(suite_text());
+    parse_cfg_stream(is, "<built-in>", cfg, tests, test_log);
+    for (auto& t : tests)
+        for (auto& k : unknown_keys(t))
+            CHECK(false, "test '%s': key '%s' is not read by algo '%s' (typo in suite.cfg?)", t.name.c_str(), k.c_str(),
+                  t.p.str("algo", "fill").c_str());
+    for (auto& a : algos())
+        CHECK(!algo_keys(a.first).empty() && algo_keys(a.first).count("algo"), "algo '%s' has no key list",
+              a.first.c_str());
+
+    const char* bad_cfg = "[default]\nwidth = 32\nwidht = 32\n"                            // typo in [default]
+                          "[test]\nname = a\nalgo = march\nwindw_mb = 8\nwindow_mb = 8\n"  // typo in a test block
+                          "[test]\nname = b\nalgo = pagemix\nwindow_mb = 8\nseconds = 5\n" // key of another algo
+                          "[test]\nname = c\nalgo = chase\nmlp = 4\n";                     // width is inherited: fine
+    Cfg c2;
+    std::vector<TestDef> t2;
+    std::istringstream is2(bad_cfg);
+    parse_cfg_stream(is2, "<test>", c2, t2, test_log);
+    CHECK(t2.size() == 3, "expected 3 tests, got %zu", t2.size());
+    if (t2.size() == 3) {
+        CHECK(unknown_keys(t2[0]) == std::vector<std::string>({"widht", "windw_mb"}), "march test: wrong key report");
+        CHECK(unknown_keys(t2[1]) == std::vector<std::string>({"widht", "window_mb"}),
+              "pagemix test: wrong key report");
+        CHECK(unknown_keys(t2[2]) == std::vector<std::string>({"widht"}), "chase test: wrong key report");
+    }
+}
+
 int main() {
     test_log.sink = [](const std::string& s) {
         printf("  (engine) %s", s.c_str());
@@ -283,6 +315,7 @@ int main() {
     test_seed();
     test_evolve();
     test_suite_parses();
+    test_suite_keys();
     if (g_fail) {
         printf("%d check(s) FAILED\n", g_fail);
         return 1;

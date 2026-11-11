@@ -1,6 +1,7 @@
 #pragma once
 // algo.h - what the ten algo_*.cpp files share, plus the registry.
 #include <map>
+#include <set>
 #include <string>
 #include <vector>
 #include "order.h"
@@ -25,6 +26,10 @@ void algo_pagemix(Run& R, const Params& P);
 void algo_coherency(Run& R, const Params& P);
 
 const std::map<std::string, AlgoFn>& algos(); // registry: name -> test algorithm; used by the suite and the unit tests
+// The suite.cfg keys an algo understands (empty for an unknown algo name), and the keys of a test that its algo would
+// silently ignore: a misspelling, or a key meant for another algo. See algo.cpp.
+const std::set<std::string>& algo_keys(const std::string& algo);
+std::vector<std::string> unknown_keys(const TestDef& t);
 
 // ------------------------------------------------------------------ shared helpers (algo.cpp)
 struct OrderSpec {
