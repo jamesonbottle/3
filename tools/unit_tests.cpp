@@ -304,6 +304,70 @@ static void test_suite_keys() {
     }
 }
 
+// FillOpts::from() replaced the P.* reads of algo_fill: it must give the old defaults and the old clamps/fallbacks, and
+// every key it lists must change something (a stale entry in keys() would hide a typo of that key).
+static std::string fill_sig(const FillOpts& o) {
+    std::string s = std::to_string((int)o.write.k) + (o.write.rev ? "r " : "f ") + std::to_string((int)o.verify.k) +
+                    (o.verify.rev ? "r " : "f ");
+    s += std::to_string(o.strided) + std::to_string(o.both) + std::to_string(o.cross) + std::to_string(o.nt) +
+         std::to_string(o.flush) + " w" + std::to_string(o.width) + " r" + std::to_string(o.reads) + " p" +
+         std::to_string(o.disturb_passes) + " s";
+    for (u64 v : o.strides)
+        s += std::to_string(v) + ",";
+    s += " d";
+    for (u64 v : o.dwell_ms)
+        s += std::to_string(v) + ",";
+    s += " m";
+    for (int v : o.disturb)
+        s += std::to_string(v) + ",";
+    return s;
+}
+static void test_fill_opts() {
+    Params none;
+    FillOpts d = FillOpts::from(none, test_log);
+    CHECK(fill_sig(d) == "0f 0f 00001 w32 r1 p2 s1, d0, m-1,", "fill defaults changed: %s", fill_sig(d).c_str());
+
+    Params p;
+    p.m = {{"order", "down"},
+           {"verify_order", "stride"},
+           {"stride", "4K 8K"},
+           {"both", "yes"},
+           {"cross", "1"},
+           {"width", "64"},
+           {"nt", "on"},
+           {"flush", "no"},
+           {"reads", "0"},
+           {"dwell_ms", "5, 10"},
+           {"disturb", "r bogus rw"},
+           {"disturb_passes", "0"}};
+    FillOpts o = FillOpts::from(p, test_log);
+    CHECK(fill_sig(o) == "0r 1f 11110 w64 r1 p1 s64,128, d5,10, m0,2,", "fill options misparsed: %s",
+          fill_sig(o).c_str()); // reads/disturb_passes 0 clamp to 1, an unknown disturb word is dropped
+    Params e;
+    e.m = {{"dwell_ms", ""}, {"disturb", "bogus"}};
+    CHECK(fill_sig(FillOpts::from(e, test_log)) == fill_sig(d), "empty dwell_ms / unknown-only disturb must fall back");
+    // verify_order follows order unless it is set itself
+    Params f;
+    f.m = {{"order", "random"}};
+    FillOpts of = FillOpts::from(f, test_log);
+    CHECK(of.write.k == Order::RANDOM && of.verify.k == Order::RANDOM, "verify_order must default to order");
+
+    const std::map<std::string, std::string> other = {
+        {"both", "1"},   {"cross", "1"}, {"disturb", "rw"}, {"disturb_passes", "5"}, {"dwell_ms", "7"},
+        {"flush", "0"},  {"nt", "1"},    {"order", "rev"},  {"reads", "3"},          {"verify_order", "random"},
+        {"width", "128"}};
+    for (const std::string& k : FillOpts::keys()) {
+        auto it = other.find(k);
+        CHECK(it != other.end(), "test has no sample value for fill key '%s'", k.c_str());
+        if (it == other.end())
+            continue;
+        Params one;
+        one.m[k] = it->second;
+        CHECK(fill_sig(FillOpts::from(one, test_log)) != fill_sig(d), "fill key '%s' changes nothing in FillOpts::from",
+              k.c_str());
+    }
+}
+
 int main() {
     test_log.sink = [](const std::string& s) {
         printf("  (engine) %s", s.c_str());
@@ -316,6 +380,7 @@ int main() {
     test_evolve();
     test_suite_parses();
     test_suite_keys();
+    test_fill_opts();
     if (g_fail) {
         printf("%d check(s) FAILED\n", g_fail);
         return 1;

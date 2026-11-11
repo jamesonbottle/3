@@ -42,6 +42,28 @@ void disturb_traffic(Run& R, const View& d, int mode, u64 passes, u64 seed);
 int parse_dmode(const std::string& s);
 bool disturb_possible(Run& R, u64 wl, const char* what);
 
+// ------------------------------------------------------------------ typed test options (M7)
+// One struct per algo, parsed ONCE before R.parallel: the algo body reads fields, never Params. from() is the only
+// place that reads the algo's own keys; keys() lists them (it feeds algo_keys(), so a misspelled key is reported).
+// Defaults here equal the defaults the algo used with P.num/P.flag before the conversion. Messages for a bad value
+// (e.g. "bad order") are emitted by from(), in the same order as before.
+struct FillOpts {
+    OrderSpec write, verify;   // order, verify_order (defaults to order)
+    bool strided = false;      // either order is a stride order
+    std::vector<u64> strides;  // stride, in lines; {1} when not strided
+    bool both = false;         // run every data variant normal and inverted
+    bool cross = false;        // verify the window of the next thread
+    int width = 32;            // bus width of the accesses in bits
+    bool nt = false;           // non-temporal stores
+    bool flush = true;         // clflush after access
+    u64 reads = 1;             // verify passes per job (>= 1)
+    std::vector<u64> dwell_ms; // idle time between write and verify; never empty
+    std::vector<int> disturb;  // disturb modes (parse_dmode); {-1} = none
+    u64 disturb_passes = 2;    // passes of disturb traffic (>= 1)
+    static const std::set<std::string>& keys();
+    static FillOpts from(const Params& P, const Logger& log);
+};
+
 // ------------------------------------------------------------------ march elements (algo_march.cpp)
 struct MOp {
     char t;
