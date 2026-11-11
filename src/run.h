@@ -1,5 +1,5 @@
 #pragma once
-// run.h - Chunk, View, Stats, Run, walk().
+// run.h - Chunk, View, Stats, Layout, Progress, ErrorSink, Run, walk().
 #include <algorithm>
 #include <atomic>
 #include <barrier>
@@ -9,6 +9,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <type_traits>
 #include <vector>
 #include "log.h"
 #include "order.h"
@@ -90,10 +91,25 @@ int run_suite(const Settings& s, Run& R); // suite.h: the one function besides R
 //    (run_suite sets them before the tests start); they reach the shared counters only through the methods.
 //  - the front-end part (public, `Status` and below): what a GUI/CLI needs to follow a run from another thread.
 //  - everything else is private; run_suite is the only outside code that writes it (friend).
+//
+// Ownership and threads. One Run serves exactly ONE run_suite call: the totals and error counters are never reset, so
+// a front-end makes a fresh Run per Start (the GUI) or has a single one (the CLI).
+//  - The front-end owns the Run and the Logger it refers to, and keeps both alive until run_suite returns. The GUI
+//    runs run_suite on a worker thread and follows it from the UI thread through status() / error_count().
+//  - run_suite owns the setup: it fills in cfg, rng, salt, testName, layout and progress, clears `stop` before the
+//    first test, and opens and closes errors.logf (CLI only; the GUI's Logger sink writes the log itself).
+//  - `stop` may be set by anyone: a front-end (Stop button, Ctrl-C), report() on the first error in stop-on-error
+//    mode, parallel() when a stop criterion (coverage or time) is reached. Only run_suite clears it, once, at the
+//    start.
+//  - report() is called by the worker threads; under errors.mu it updates the error counters, the "first error" times
+//    and errors.logf. parallel() sets `bar` for its duration and joins every worker before it returns.
+//  - A Run is neither copyable nor movable: the workers, the barrier and the front-end all hold its address.
 struct Run {
     // ---- algo-facing: data (read-only for the algos)
     const Logger& log; // where output goes; owned by the front-end, must outlive the Run
     explicit Run(const Logger& l) : log(l) {}
+    Run(const Run&) = delete;
+    Run& operator=(const Run&) = delete;
     u64 salt = 0; // from the run seed and the loop number (run_suite sets it per loop): every random choice is a
                   // function of it
     int rng = 0;  // hash mixer chosen in Settings (0 splitmix64, 1 murmur3 fmix64, 2 xorshift64*); see mix64()
@@ -190,6 +206,9 @@ struct Run {
     std::atomic<bool> running{
         false}; // set by run_suite around a run (nothing reads it yet, see MODERNIZE.md parking lot)
 };
+static_assert(!std::is_copy_constructible_v<Run> && !std::is_copy_assignable_v<Run> &&
+                  !std::is_move_constructible_v<Run> && !std::is_move_assignable_v<Run>,
+              "Run is shared by address between the workers, the barrier and the front-end");
 
 template <class F>
 void Run::parallel(F fn) {
