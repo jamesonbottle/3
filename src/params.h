@@ -1,6 +1,5 @@
 #pragma once
-// params.h - string helpers, Params, suite.cfg parser.
-#include <istream>
+// params.h - string helpers, Params, TestDef, Cfg.
 #include <map>
 #include <set>
 #include <string>
@@ -54,9 +53,5 @@ struct Cfg {
     bool large = true, stopOnErr = false;
     std::string logFile = "ddr5test.log";
 };
-
-// Parse diagnostics (bad line, unknown key) go to `log`.
-bool parse_cfg_stream(std::istream& f, const std::string& path, Cfg& cfg, std::vector<TestDef>& tests,
-                      const Logger& log);
 
 } // namespace ddr5

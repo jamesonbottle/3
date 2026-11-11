@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Reproducible self-test of the engine on Linux (needs g++ 11+ and an AVX2 CPU). Usage: tools/selftest.sh
 #
-#  1. unit tests       address orders are permutations, windows cover the whole chunk, suite.cfg parses, every hash mixer avalanches,
+#  1. unit tests       address orders are permutations, windows cover the whole chunk, the built-in suite is valid, every hash mixer avalanches,
 #                      one seed reproduces every random choice, evolving-data generations follow their rules
 #  2. clean runs       the normal build must find NO errors (no false positives), exit code 0. Every run uses a fresh random seed
 #                      (printed as "run seed: 0x..."; a failure prints it so the run can be repeated with --seed); 2c checks the seed itself
@@ -29,8 +29,7 @@ grep -E "error|warning" "$OUT/build.log" && fail=1
 mv -f "$OUT/ddr5test_cli" "$OUT/cli"; mv -f "$OUT/ddr5test_cli_inject" "$OUT/cli_inject"
 
 echo "== 1. unit tests"
-check "suite_data.h is up to date with suite.cfg" 'python3 tools/gen_suite.py --check'
-check "orders, windows, generators, suite parsing" 'timeout $TMO "$OUT/unit_tests" > "$OUT/unit.out" 2>&1 || { cat "$OUT/unit.out"; false; }'
+check "orders, windows, generators, built-in suite" 'timeout $TMO "$OUT/unit_tests" > "$OUT/unit.out" 2>&1 || { cat "$OUT/unit.out"; false; }'
 
 echo "== 2. clean runs: must report no errors"
 n=0

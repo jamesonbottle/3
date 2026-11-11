@@ -51,7 +51,8 @@ set(ENGINE_SOURCES
   src/params.cpp
   src/run.cpp
   src/seed.cpp
-  src/suite.cpp)
+  src/suite.cpp
+  src/suite_data.cpp)
 if(WIN32)
   list(APPEND ENGINE_SOURCES src/platform_win.cpp)
 else()
@@ -94,7 +95,7 @@ if(WIN32)
 endif()
 
 # Tests: `ctest --output-on-failure` (from the build directory). tools/selftest.sh stays the full gate; it builds its own
-# copy of the engine (normal + fault injection) in a temporary directory, so it needs bash, g++ and python3 (Linux).
+# copy of the engine (normal + fault injection) in a temporary directory, so it needs bash and g++ (Linux).
 enable_testing()
 add_test(NAME unit_tests COMMAND unit_tests)
 if(NOT WIN32)

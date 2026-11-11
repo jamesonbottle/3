@@ -2,7 +2,6 @@
 #include "params.h"
 #include <cctype>
 #include <cstdlib>
-#include <sstream>
 
 namespace ddr5 {
 
@@ -49,70 +48,6 @@ std::vector<std::string> split_ws(const std::string& s, bool commas) {
     if (!cur.empty())
         o.push_back(cur);
     return o;
-}
-
-bool parse_cfg_stream(std::istream& f, const std::string& path, Cfg& cfg, std::vector<TestDef>& tests,
-                      const Logger& log) {
-    std::string line, sect;
-    Params defaults;
-    TestDef* cur = nullptr;
-    int lineno = 0;
-    while (std::getline(f, line)) {
-        ++lineno;
-        size_t h = line.find('#');
-        if (h != std::string::npos)
-            line = line.substr(0, h);
-        line = trim(line);
-        if (line.empty() || line[0] == ';')
-            continue;
-        if (line[0] == '[') {
-            sect = lower(trim(line.substr(1, line.find(']') - 1)));
-            if (sect == "test") {
-                tests.emplace_back();
-                cur = &tests.back();
-                cur->name = "test" + std::to_string(tests.size());
-                cur->p = defaults;
-            } else if (sect == "default") {
-                defaults = Params();
-                cur = nullptr;
-            }
-            continue;
-        }
-        size_t eq = line.find('=');
-        if (eq == std::string::npos) {
-            log.emitf("%s:%d: expected key = value\n", path.c_str(), lineno);
-            continue;
-        }
-        std::string k = lower(trim(line.substr(0, eq))), v = trim(line.substr(eq + 1));
-        if (sect == "global") {
-            if (k == "threads")
-                cfg.threads = (int)pnum(v);
-            else if (k == "loops")
-                cfg.loops = pnum(v);
-            else if (k == "large_pages")
-                cfg.large = pnum(v) != 0;
-            else if (k == "stop_on_error")
-                cfg.stopOnErr = pnum(v) != 0;
-            else if (k == "log")
-                cfg.logFile = v;
-            else if (k == "max_errors_logged")
-                cfg.maxLog = pnum(v);
-            else if (k == "memory_percent" || k == "memory_mb" || k == "margin_mb" || k == "cache_mb")
-                (void)pnum(v); // old keys, no longer used; still accepted so existing config files load
-            else
-                log.emitf("%s:%d: unknown global key '%s'\n", path.c_str(), lineno, k.c_str());
-        } else if (sect == "default")
-            defaults.m[k] = v;
-        else if (sect == "test" && cur) {
-            if (k == "name")
-                cur->name = v;
-            else {
-                cur->p.m[k] = v;
-                cur->own.insert(k);
-            }
-        }
-    }
-    return true;
 }
 
 } // namespace ddr5

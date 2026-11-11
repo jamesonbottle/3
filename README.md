@@ -23,7 +23,7 @@ Advanced tab
 
 ## What is tested
 
-28 tests (87 consolidated into 35 by turning near-duplicates into list sweeps, audited for usefulness and trimmed, plus 3 modelled on Google's stressapptest and 1 evolving-data test) built around how DDR5 behaves: BL16 64-byte bursts over two 32-bit subchannels, bank groups (tCCD_L/S, tRRD, tFAW), row open/close (tRCD/tRP/tRAS/tRC), bus turnaround (tWTR/tRTW), long idle gaps between write and verify (refresh keeps running during them, so this is an idle soak, not a retention-time test), DQ lane crosstalk and pattern-sensitivity styles, address-decode tests, pointer-chase latency stress, and read/write mixes. Read `suite.cfg` for the full list; each block has a name.
+28 tests (87 consolidated into 35 by turning near-duplicates into list sweeps, audited for usefulness and trimmed, plus 3 modelled on Google's stressapptest and 1 evolving-data test) built around how DDR5 behaves: BL16 64-byte bursts over two 32-bit subchannels, bank groups (tCCD_L/S, tRRD, tFAW), row open/close (tRCD/tRP/tRAS/tRC), bus turnaround (tWTR/tRTW), long idle gaps between write and verify (refresh keeps running during them, so this is an idle soak, not a retention-time test), DQ lane crosstalk and pattern-sensitivity styles, address-decode tests, pointer-chase latency stress, and read/write mixes. Read `src/suite_data.cpp` for the full list; each entry has a name.
 
 Ideas taken from [stressapptest](https://github.com/stressapptest/stressapptest) (reimplemented from its public description, no code copied):
 - **Pattern table**: walking ones / inverse-alternating ones / zeros, 0/1, 5/A, 8b10b-style, "busy" patterns, each held for 1/2/4/8 words (32 to 256-bit bus-width repeat) and inverted too.
@@ -70,24 +70,23 @@ GitHub Actions builds both on `windows-latest` and uploads them as artifacts.
 
 ## Changing the suite
 
-Edit `suite.cfg` (format documented at the top), run `python tools/gen_suite.py`, rebuild. The generated `src/suite_data.h` is committed so a normal build needs no Python. `python tools/gen_suite.py --check` reports (exit 1) if the two are out of sync; `tools/selftest.sh` runs it.
+The tests are plain C++ data in `src/suite_data.cpp` (key documentation at the top of the file). Edit an entry and rebuild; there is no config file, no generator and no Python. `tools/selftest.sh` fails on a misspelled key.
 
 ## Layout
 
 ```
 src/types.h        u8..u64, the 64-byte Line, bit helpers
 src/platform.h     OS layer (plat::)      src/platform_win.cpp  src/platform_posix.cpp
-src/log.h/.cpp     Logger (output sink)            src/params.h/.cpp     string helpers, Params, suite.cfg parser
+src/log.h/.cpp     Logger (output sink)            src/params.h/.cpp     string helpers, Params, TestDef
 src/seed.h/.cpp    run seed, hash mixer   src/order.h/.cpp      address orders
 src/gen.h/.cpp     data generators        src/lineio.h          64-byte store/load/verify (templates)
 src/run.h/.cpp     Run, walk, error report
 src/algo.h/.cpp    shared algo helpers, typed per-algo options (FillOpts ...), the algos() registry;  src/algo_*.cpp  one file per test algorithm
-src/suite.h/.cpp   run_suite(), failure summary, FPU stress;  src/suite_data.h  generated from suite.cfg
+src/suite.h/.cpp   run_suite(), failure summary, FPU stress;  src/suite_data.cpp  the 28 built-in tests
 src/inject.h/.cpp  fault-injection hooks (DDR5_INJECT) for the self-test; inject.cpp is only in the injection engine
 src/main_gui.cpp   Win32 GUI              src/main_cli.cpp      console front-end
 src/app.rc, app.manifest   visual styles + DPI awareness
 CMakeLists.txt             engine static library (built twice: normal + fault injection), front-ends, unit tests
-tools/gen_suite.py         suite.cfg -> suite_data.h
 tools/unit_tests.cpp       unit tests of orders / windows / generators / hash mixers / seeds / evolving data / suite parsing
 tools/selftest.sh          unit tests + clean runs + fault injection (see Self-test)
 tools/format.sh            clang-format all sources (--check in CI)

@@ -1,6 +1,6 @@
 // DDR5 RAM Test - Windows GUI front-end. Native Win32, no runtime dependencies.
 // Layout follows the familiar two-tab memory-tester window: "Testing" (status, settings, Start) and "Advanced".
-// The whole test suite is compiled in (see suite.cfg / tools/gen_suite.py); there is no config file at runtime.
+// The whole test suite is compiled in (see src/suite_data.cpp); there is no config file at runtime.
 #ifndef UNICODE
 #define UNICODE
 #endif

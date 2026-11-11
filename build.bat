@@ -1,6 +1,5 @@
 @echo off
 REM Builds ddr5ramtest.exe (GUI) and ddr5test_cli.exe into build\ with CMake. Run from a "x64 Native Tools Command Prompt for VS".
-REM Optional: python tools\gen_suite.py   (only after editing suite.cfg)
 setlocal
 if not exist build mkdir build
 REM Ninja ships with Visual Studio and the GitHub runners; fall back to CMake's default generator if it is missing.

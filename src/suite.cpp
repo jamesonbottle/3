@@ -1,4 +1,4 @@
-// suite.cpp - built-in suite loading, run_suite, failure summary, FPU stress.
+// suite.cpp - run_suite, failure summary, FPU stress.
 #include "suite.h"
 #include <algorithm>
 #include <atomic>
@@ -6,7 +6,6 @@
 #include <cstring>
 #include <exception>
 #include <functional>
-#include <sstream>
 #include <thread>
 #include <vector>
 #include "algo.h"
@@ -14,18 +13,8 @@
 #include "params.h"
 #include "platform.h"
 #include "seed.h"
-// suite_data.h is generated from suite.cfg by tools/gen_suite.py: the whole test list is compiled in.
-// Included here ONLY: it defines static arrays, a second include would duplicate the 16 KB of text.
-#include "suite_data.h"
 
 namespace ddr5 {
-
-std::string suite_text() {
-    std::string t;
-    for (int i = 0; i < SUITE_CFG_NPARTS; i++)
-        t += SUITE_CFG_PARTS[i];
-    return t;
-}
 
 static void emit_skew(const char* prefix, const Stats& s, u64 regionBytes, const Logger& log) {
     u64 n = s.lines.load();
@@ -69,11 +58,7 @@ static void fpu_stress(std::atomic<bool>& stop) {
 int run_suite(const Settings& s, Run& R) {
     try {
         Cfg cfg;
-        std::vector<TestDef> tests;
-        {
-            std::istringstream is(suite_text());
-            parse_cfg_stream(is, "<built-in suite>", cfg, tests, R.log);
-        }
+        std::vector<TestDef> tests = builtin_suite();
         for (const TestDef& t :
              tests) // keys no algo reads would be ignored silently: say so (a clean suite prints nothing)
             for (const std::string& k : unknown_keys(t)) {
@@ -81,7 +66,7 @@ int run_suite(const Settings& s, Run& R) {
                     R.log.emitf("test '%s': key '%s' is not used by algo '%s' (ignored)\n", t.name.c_str(), k.c_str(),
                                 lower(t.p.str("algo", "fill")).c_str());
                 else
-                    R.log.emitf("test '%s': key '%s' (from [default]) is not used by any algo (ignored)\n",
+                    R.log.emitf("test '%s': key '%s' (inherited default) is not used by any algo (ignored)\n",
                                 t.name.c_str(), k.c_str());
             }
         cfg.threads = s.threads;

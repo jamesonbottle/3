@@ -250,12 +250,10 @@ static void test_evolve() {
     }
 }
 
-// Every style / pattern name used by suite.cfg expands to at least one variant (a typo would silently drop a test).
+// Every style / pattern name used by the built-in suite expands to at least one variant (a typo would silently drop a
+// test).
 static void test_suite_parses() {
-    Cfg cfg;
-    std::vector<TestDef> tests;
-    std::istringstream is(suite_text());
-    parse_cfg_stream(is, "<built-in>", cfg, tests, test_log);
+    std::vector<TestDef> tests = builtin_suite();
     CHECK(tests.size() == 28, "expected 28 tests, got %zu", tests.size());
     size_t quick = 0;
     for (auto& t : tests)
@@ -274,30 +272,32 @@ static void test_suite_parses() {
     }
 }
 
-// A misspelled key in suite.cfg is ignored without a word, so every key of the built-in suite must be one its algo
+// A misspelled key in the suite is ignored without a word, so every key of the built-in suite must be one its algo
 // reads, and the check itself must catch the usual mistakes.
 static void test_suite_keys() {
-    Cfg cfg;
-    std::vector<TestDef> tests;
-    std::istringstream is(suite_text());
-    parse_cfg_stream(is, "<built-in>", cfg, tests, test_log);
+    std::vector<TestDef> tests = builtin_suite();
     for (auto& t : tests)
         for (auto& k : unknown_keys(t))
-            CHECK(false, "test '%s': key '%s' is not read by algo '%s' (typo in suite.cfg?)", t.name.c_str(), k.c_str(),
-                  t.p.str("algo", "fill").c_str());
+            CHECK(false, "test '%s': key '%s' is not read by algo '%s' (typo in suite_data.cpp?)", t.name.c_str(),
+                  k.c_str(), t.p.str("algo", "fill").c_str());
     for (auto& a : algos())
         CHECK(!algo_keys(a.first).empty() && algo_keys(a.first).count("algo"), "algo '%s' has no key list",
               a.first.c_str());
 
-    const char* bad_cfg = "[default]\nwidth = 32\nwidht = 32\n"                            // typo in [default]
-                          "[test]\nname = a\nalgo = march\nwindw_mb = 8\nwindow_mb = 8\n"  // typo in a test block
-                          "[test]\nname = b\nalgo = pagemix\nwindow_mb = 8\nseconds = 5\n" // key of another algo
-                          "[test]\nname = c\nalgo = chase\nmlp = 4\n";                     // width is inherited: fine
-    Cfg c2;
-    std::vector<TestDef> t2;
-    std::istringstream is2(bad_cfg);
-    parse_cfg_stream(is2, "<test>", c2, t2, test_log);
-    CHECK(t2.size() == 3, "expected 3 tests, got %zu", t2.size());
+    // a typo in a key every test inherits, one in a test's own keys, and a key that belongs to another algo
+    auto mk = [](const char* algo, std::initializer_list<const char*> own) {
+        TestDef t;
+        t.p.m["width"] = "32";
+        t.p.m["widht"] = "32"; // typo in the inherited defaults
+        t.p.m["algo"] = algo;
+        for (const char* k : own) {
+            t.p.m[k] = "8";
+            t.own.insert(k);
+        }
+        return t;
+    };
+    std::vector<TestDef> t2 = {mk("march", {"windw_mb", "window_mb"}), mk("pagemix", {"window_mb", "seconds"}),
+                               mk("chase", {"mlp"})};
     if (t2.size() == 3) {
         CHECK(unknown_keys(t2[0]) == std::vector<std::string>({"widht", "windw_mb"}), "march test: wrong key report");
         CHECK(unknown_keys(t2[1]) == std::vector<std::string>({"widht", "window_mb"}),

@@ -1,0 +1,316 @@
+// suite_data.cpp - the built-in DDR5 test suite (28 tests), written as code: there is no config file and no
+// generator. To change a test, edit it here and rebuild; `unit_tests` fails on a misspelled key or a bad name.
+//
+// Every test starts from kDefaults (width, flush) and overrides it with its own keys. Numbers take 0x / K / M / G.
+// Space-separated lists SWEEP: every combination becomes its own run, so one entry covers what used to be many tests.
+//
+//   algo      fill | march | rwstorm | evolve | chase | copy | hammer | probe
+//   quick     1 = also part of the "Quick" suite
+//   data      pattern (default) | hash | addr          seeds = N hash/addr seeds
+//   pattern   list; "0xAAAAAAAA:0x55555555" = alternating beats of the 16-beat burst
+//   style     DQ lane styles: sso xtalk half quarter low pulse skew victim walk1 walk0 prbs
+//   order / verify_order   list: seq rev stride random bitrev gray butterfly      stride = byte-stride list
+//   altshift  list: invert data when bit N of the line index is set (checkerboard scale)     modulo = N list
+//   march     "label=elements | label2=elements2".  ^ up  v down  * any;  w0 w1 write;  r0 r1 verify;  D(ms) pause;
+//             X(r2) / X(w1) / X(rw3) = disturb: N passes of random traffic on ANOTHER window (needs window_mb)
+//   burst     list: lines per op group in a march     dwell_ms   list: pause between write and verify
+//   disturb   list of r | w | rw (fill)     disturb_passes     reads = repeated verify passes     both = 1 also
+//   inverted data width 8|16|32   nt = 1 streaming stores   flush = 1 clflush every access   cross = 1 verify another
+//   thread's chunk window_mb limits each run to a rolling window (each run uses the next window) data = sat:
+//   stressapptest-style pattern table, sat_width list (32 64 128 256 = bus-width repeat) pagemix: seconds coherency:
+//   lines list, inc, seconds   (both use the whole region / first lines, no window) (algo = hammer / probe still exist
+//   in the engine, no built-in test uses them; see git history for the old row-hammer blocks) chase: mlp list rwstorm:
+//   passes   hammer: rowstride aggressors acts rounds   copy: method block evolve: data = hash, seeds, passes, period
+//   every line is rewritten with NEW data every 1..period passes (its own rate); after each pass
+//           all lines are verified against their latest generation, so lost writes and stray changes to untouched lines
+//           both show
+
+#include <initializer_list>
+#include <utility>
+#include "suite.h"
+
+namespace ddr5 {
+
+namespace {
+
+using Keys = std::initializer_list<std::pair<const char*, const char*>>;
+
+// Values every test inherits unless it sets the key itself.
+const std::pair<const char*, const char*> kDefaults[] = {{"width", "32"}, {"flush", "1"}};
+
+TestDef def(const char* name, Keys keys) {
+    TestDef t;
+    t.name = name;
+    for (auto& kv : kDefaults)
+        t.p.m[kv.first] = kv.second;
+    for (auto& kv : keys) {
+        t.p.m[kv.first] = kv.second;
+        t.own.insert(kv.first);
+    }
+    return t;
+}
+
+} // namespace
+
+std::vector<TestDef> builtin_suite() {
+    return {
+        // ======================================================================== addressing / decode
+        def("Address-in-address, every access order",
+            {
+                {"algo", "march"},
+                {"quick", "1"},
+                {"data", "addr"},
+                {"seeds", "2"},
+                {"march", "*(w0) ^(r0,w1) v(r1,w0) *(r0)"},
+                {"order", "seq rev bitrev gray butterfly random"},
+                {"window_mb", "512"},
+            }),
+        def("Power-of-2 stride sweep, random verify (every bank / bank-group / row bit)",
+            {
+                {"algo", "fill"},
+                {"data", "hash"},
+                {"order", "stride"},
+                {"verify_order", "random"},
+                {"stride", "64 128 256 512 1K 2K 4K 8K 16K 32K 64K 128K 256K 512K 1M 2M"},
+                {"reads", "2"},
+                {"window_mb", "1024"},
+            }),
+        // ======================================================================== data bus / DQ lanes
+        def("Solid and checker patterns",
+            {
+                {"algo", "fill"},
+                {"quick", "1"},
+                {"pattern", "0x00000000 0xFFFFFFFF 0xAAAAAAAA 0x55555555 0xCCCCCCCC 0x33333333 0xF0F0F0F0 0x0F0F0F0F"},
+                {"both", "1"},
+            }),
+        def("Stressapptest-style patterns: walking, 8b10b, 5/A, 2fd at 32 to 256-bit repeat",
+            {
+                {"algo", "fill"},
+                {"data", "sat"},
+                {"both", "1"},
+                {"window_mb", "1024"},
+            }),
+        def("Walking ones and zeros across 32 DQ lanes",
+            {
+                {"algo", "fill"},
+                {"style", "walk1 walk0"},
+                {"window_mb", "2048"},
+            }),
+        def("DQ lane styles: SSO, crosstalk, nyquist, pulse, skew, PRBS7",
+            {
+                {"algo", "fill"},
+                {"quick", "1"},
+                {"style", "sso xtalk half quarter low pulse skew prbs"},
+                {"altshift", "0"},
+                {"both", "1"},
+                {"window_mb", "512"},
+            }),
+        def("Single victim lane against aggressors (32 lanes x 6 modes)",
+            {
+                {"algo", "fill"},
+                {"style", "victim"},
+                {"altshift", "6"},
+                {"window_mb", "256"},
+            }),
+        // ======================================================================== march algorithms
+        def("Classic marches, hash data (MATS+ MATS++ X Y C- A B U LR SS PMOVI)",
+            {
+                {"algo", "march"},
+                {"data", "hash"},
+                {"march",
+                 "MATS+=*(w0) ^(r0,w1) v(r1,w0) | MATS++=*(w0) ^(r0,w1) v(r1,w0,r0) | March X=*(w0) ^(r0,w1) v(r1,w0) "
+                 "*(r0) | March Y=*(w0) ^(r0,w1,r1) v(r1,w0,r0) *(r0) | March C-=*(w0) ^(r0,w1) ^(r1,w0) v(r0,w1) "
+                 "v(r1,w0) *(r0) | March A=*(w0) ^(r0,w1,w0,w1) ^(r1,w0,w1) v(r1,w0,w1,w0) v(r0,w1,w0) | March B=*(w0) "
+                 "^(r0,w1,r1,w0,r0,w1) ^(r1,w0,w1) v(r1,w0,w1,w0) v(r0,w1,w0) | March U=*(w0) ^(r0,w1,r1,w0) ^(r0,w1) "
+                 "v(r1,w0,r0,w1) v(r1,w0) | March LR=*(w0) v(r0,w1) ^(r1,w0,r0,w1) ^(r1,w0) ^(r0,w1,r1,w0) ^(r0) | "
+                 "March SS=*(w0) ^(r0,r0,w0,r0,w1) ^(r1,r1,w1,r1,w0) v(r0,r0,w0,r0,w1) v(r1,r1,w1,r1,w0) *(r0) | "
+                 "PMOVI=v(w0) ^(r0,w1,r1) ^(r1,w0,r0) v(r0,w1,r1) v(r1,w0,r0)"},
+                {"window_mb", "512"},
+            }),
+        def("March C-, every access order (seq rev random bitrev gray butterfly stride)",
+            {
+                {"algo", "march"},
+                {"data", "hash"},
+                {"march", "*(w0) ^(r0,w1) ^(r1,w0) v(r0,w1) v(r1,w0) *(r0)"},
+                {"order", "seq rev random bitrev gray butterfly stride"},
+                {"stride", "64 256 1K 4K 16K 64K 256K 1M 2M"},
+                {"window_mb", "512"},
+            }),
+        def("Bus turnaround: read/write switching every 1..64 lines, sequential and random",
+            {
+                {"algo", "march"},
+                {"quick", "1"},
+                {"data", "hash"},
+                {"march", "*(w0) ^(r0,w1) v(r1,w0) *(r0)"},
+                {"burst", "1 2 4 8 16 32 64"},
+                {"order", "seq random"},
+                {"window_mb", "1024"},
+            }),
+        def("Write/read adjacency (tWR tWTR tRTP tRTW): back-to-back on the same line",
+            {
+                {"algo", "march"},
+                {"data", "hash"},
+                {"march",
+                 "write-read=*(w0) ^(w1,r1,w0,r0) v(w1,r1,w0,r0) | read-write=*(w0) ^(r0,w1,r1,w0) v(r0,w1,r1,w0)"},
+                {"burst", "1 8"},
+                {"order", "seq random"},
+                {"window_mb", "512"},
+            }),
+        def("SSE2 16-byte accesses with non-temporal stores",
+            {
+                {"algo", "march"},
+                {"data", "hash"},
+                {"march", "*(w0) ^(r0,w1) v(r1,w0) *(r0)"},
+                {"width", "16"},
+                {"nt", "1"},
+                {"window_mb", "512"},
+            }),
+        def("Normal cached traffic (no clflush: write-back and eviction behaviour)",
+            {
+                {"algo", "march"},
+                {"data", "hash"},
+                {"march", "*(w0) ^(r0,w1) v(r1,w0) *(r0)"},
+                {"flush", "0"},
+                {"window_mb", "512"},
+            }),
+        // ======================================================================== real-world access patterns
+        def("Random-order hash soak (every access a row miss)",
+            {
+                {"algo", "fill"},
+                {"quick", "1"},
+                {"data", "hash"},
+                {"seeds", "6"},
+                {"order", "random"},
+                {"verify_order", "random"},
+                {"reads", "2"},
+                {"window_mb", "1024"},
+            }),
+        def("Cross-core verify (data written by another thread / CCD)",
+            {
+                {"algo", "fill"},
+                {"data", "hash"},
+                {"seeds", "4"},
+                {"order", "random"},
+                {"verify_order", "rev"},
+                {"cross", "1"},
+                {"window_mb", "1024"},
+            }),
+        def("Pointer chase with 1 / 2 / 4 / 8 / 16 / 32 parallel chains (latency to max activation rate)",
+            {
+                {"algo", "chase"},
+                {"quick", "1"},
+                {"mlp", "1 2 4 8 16 32"},
+                {"seeds", "2"},
+                {"window_mb", "512"},
+            }),
+        def("Bulk copy engines (memcpy / rep movsb / non-temporal copy)",
+            {
+                {"algo", "copy"},
+                {"quick", "1"},
+                {"data", "hash"},
+            }),
+        def("Read/write storm, hash data, random rewrite vs sequential read",
+            {
+                {"algo", "rwstorm"},
+                {"quick", "1"},
+                {"data", "hash"},
+                {"seeds", "2"},
+                {"passes", "8"},
+                {"window_mb", "1024"},
+            }),
+        def("Read/write storm, SSO and crosstalk lane patterns",
+            {
+                {"algo", "rwstorm"},
+                {"style", "sso xtalk half"},
+                {"altshift", "0"},
+                {"passes", "10"},
+                {"window_mb", "1024"},
+            }),
+        def("Read/write storm, non-temporal stores vs SSE2 reads",
+            {
+                {"algo", "rwstorm"},
+                {"data", "hash"},
+                {"nt", "1"},
+                {"width", "16"},
+                {"passes", "6"},
+                {"window_mb", "1024"},
+            }),
+        def("Read/write storm, random on both sides (maximum bank conflicts)",
+            {
+                {"algo", "rwstorm"},
+                {"data", "hash"},
+                {"order", "random"},
+                {"verify_order", "random"},
+                {"passes", "4"},
+                {"window_mb", "1024"},
+            }),
+        def("Evolving data: lines rewritten at different rates, every line checked against its latest generation",
+            {
+                {"algo", "evolve"},
+                {"quick", "1"},
+                {"data", "hash"},
+                {"seeds", "2"},
+                {"order", "random"},
+                {"verify_order", "seq"},
+                {"passes", "16"},
+                {"period", "8"},
+                {"window_mb", "512"},
+            }),
+        // ======================================================================== coupling between cells and blocks
+        def("Checkerboards at line / 4K / 8K / 64K / 2MB scale",
+            {
+                {"algo", "fill"},
+                {"quick", "1"},
+                {"pattern", "0x00000000 0xAAAAAAAA:0x55555555"},
+                {"altshift", "0 6 7 10 15"},
+                {"both", "1"},
+                {"window_mb", "512"},
+            }),
+        // ======================================================================== idle, refresh interaction, disturb
+        // (manufacturer-style flows)
+        def("Long idle soak: pause of 2 s and 8 s between write and verify (refresh keeps running; not a "
+            "retention-time test)",
+            {
+                {"algo", "fill"},
+                {"pattern", "0x00000000 0xAAAAAAAA:0x55555555"},
+                {"both", "1"},
+                {"dwell_ms", "2000 8000"},
+                {"window_mb", "256"},
+            }),
+        def("Idle gaps of 3 ms and 60 ms between write and verify (power-down entry/exit)",
+            {
+                {"algo", "fill"},
+                {"data", "hash"},
+                {"seeds", "40"},
+                {"dwell_ms", "3 60"},
+                {"window_mb", "64"},
+            }),
+        def("Disturb traffic between write and verify (neighbouring window: read / write / both)",
+            {
+                {"algo", "fill"},
+                {"data", "hash"},
+                {"seeds", "2"},
+                {"disturb", "r w rw"},
+                {"disturb_passes", "3"},
+                {"window_mb", "256"},
+            }),
+        // ======================================================================== real-world page traffic and cache
+        // coherency
+        def("Page shuffle: random page copy / invert / refill / check with per-page patterns (stressapptest style)",
+            {
+                {"algo", "pagemix"},
+                {"quick", "1"},
+                {"seconds", "60"},
+            }),
+        def("Cache coherency: shared cache lines, one owner byte per thread (cores / fabric, not DRAM cells)",
+            {
+                {"algo", "coherency"},
+                {"quick", "1"},
+                {"lines", "2 8 64"},
+                {"inc", "1000"},
+                {"seconds", "8"},
+            }),
+    };
+}
+
+} // namespace ddr5

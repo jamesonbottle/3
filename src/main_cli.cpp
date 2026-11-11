@@ -158,12 +158,8 @@ int main(int argc, char** argv) {
     }
     static Logger log; // outlives the static Run below
     if (list) {
-        Cfg cfg;
-        std::vector<TestDef> tests;
-        std::istringstream is(suite_text());
-        parse_cfg_stream(is, "<built-in>", cfg, tests, log);
         int n = 0;
-        for (auto& t : tests)
+        for (auto& t : builtin_suite())
             printf("%3d %s %-9s %s\n", ++n, t.p.flag("quick", false) ? "Q" : " ", t.p.str("algo", "fill").c_str(),
                    t.name.c_str());
         return 0;
