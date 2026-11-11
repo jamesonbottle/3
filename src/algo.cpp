@@ -53,7 +53,7 @@ int parse_dmode(const std::string& s) {
     return s == "r" || s == "read" ? 0 : s == "w" || s == "write" ? 1 : s == "rw" ? 2 : -1;
 }
 bool disturb_possible(Run& R, u64 wl, const char* what) {
-    if (wl && R.chunks[0].lines / wl >= 2)
+    if (wl && R.layout.chunks[0].lines / wl >= 2)
         return true;
     R.log.emitf("%s: disturb needs window_mb small enough for >=2 windows per thread chunk; disturb disabled\n", what);
     return false;

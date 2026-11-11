@@ -48,7 +48,39 @@ struct Stats {
             a = 0;
     }
 };
-inline thread_local u64 t_vcount = 0; // lines this thread has verified since its last flush into Run::vbytes / vtotal
+inline thread_local u64 t_vcount =
+    0; // lines this thread has verified since its last flush into Progress::vbytes / vtotal
+
+// Where the tested memory is and how it is split between the worker threads. run_suite fills it in before the first
+// test starts; the algos only read it.
+struct Layout {
+    u8* region = nullptr;
+    u64 regionBytes = 0;
+    int T = 1;                 // worker threads
+    std::vector<Chunk> chunks; // one per thread
+};
+
+// How far the run has got: the byte counters the workers bump, the clocks, and the user's stop criteria.
+struct Progress {
+    std::atomic<u64> done{0}; // bytes moved in the current test (drives the GB/s figure)
+    // coverage (HCI/Karhu-style: how many times the tested region has been verified): this test / the whole run
+    std::atomic<u64> vbytes{0}, vtotal{0};
+    double tStart = 0, tTestStart = 0; // plat::now() at the start of the run / of the current test
+    u64 stopCoverage = 0;              // stop once vtotal reaches this many percent of the region (0 = off)
+    double stopSeconds = 0;            // stop after this many seconds (0 = off)
+    std::string stopReason;
+};
+
+// Error reporting: the log file, the "first error" times, the counters. `mu` serializes Run::report and also guards
+// Run::label (the status line reads it from the GUI thread).
+struct ErrorSink {
+    std::mutex mu;
+    FILE* logf = nullptr;
+    u64 logged = 0;
+    double firstErrRun = -1, firstErrTest = -1; // seconds into the run / the current test; -1 = no error yet
+    std::atomic<u64> errTotal{0};
+};
+
 struct Run {
     const Logger& log; // where output goes; owned by the front-end, must outlive the Run
     explicit Run(const Logger& l) : log(l) {}
@@ -56,26 +88,14 @@ struct Run {
     u64 salt = 0; // from the run seed and the loop number (run_suite sets it per loop): every random choice is a
                   // function of it
     int rng = 0;  // hash mixer chosen in Settings (0 splitmix64, 1 murmur3 fmix64, 2 xorshift64*); see mix64()
-    int T = 1;
-    std::vector<Chunk> chunks;
+    Layout layout;
+    Progress progress;
+    ErrorSink errors;
     std::atomic<bool> stop{false};
-    std::atomic<u64> done{0};
     Stats st, total;
     std::barrier<>* bar = nullptr;
-    std::mutex mu;
     std::string label, testName;
-    FILE* logf = nullptr;
-    u64 logged = 0;
     std::map<std::string, u64> winctr;
-    u8* region = nullptr;
-    u64 regionBytes = 0;
-    // coverage (HCI/Karhu-style: how many times the tested region has been verified), timing, stop criteria
-    std::atomic<u64> vbytes{0}, vtotal{0};
-    double tStart = 0, tTestStart = 0, firstErrRun = -1, firstErrTest = -1;
-    u64 stopCoverage = 0;
-    double stopSeconds = 0;
-    std::string stopReason;
-    std::atomic<u64> errTotal{0};
     std::atomic<bool> running{false};
 
     // call once per verified 64B line; flushes to the shared counters every 64K lines per thread, and once more when
@@ -88,20 +108,20 @@ struct Run {
         u64 c = t_vcount;
         t_vcount = 0;
         if (c) {
-            vbytes.fetch_add(c * 64, std::memory_order_relaxed);
-            vtotal.fetch_add(c * 64, std::memory_order_relaxed);
+            progress.vbytes.fetch_add(c * 64, std::memory_order_relaxed);
+            progress.vtotal.fetch_add(c * 64, std::memory_order_relaxed);
         }
     }
     void sync() { bar->arrive_and_wait(); }
     void set_label(const std::string& s) {
-        std::lock_guard<std::mutex> l(mu);
+        std::lock_guard<std::mutex> l(errors.mu);
         label = s;
     }
-    void tick() { done.fetch_add(0x10000ull * 64, std::memory_order_relaxed); }
+    void tick() { progress.done.fetch_add(0x10000ull * 64, std::memory_order_relaxed); }
     // Window `ctr` of the thread's chunk. ceil(lines / wl) windows rotate; the last one is shifted back so it ends
     // exactly at the chunk end (it overlaps the previous window instead of leaving a never-tested tail).
     View view(int tid, u64 wl, u64 ctr) const {
-        const Chunk& c = chunks[tid];
+        const Chunk& c = layout.chunks[tid];
         if (!wl || wl >= c.lines)
             return {c.base, c.g, c.lines};
         u64 nw = (c.lines + wl - 1) / wl, s = (ctr % nw) * wl;
@@ -112,7 +132,7 @@ struct Run {
     // A window of the same size that never overlaps view(tid, wl, ctr): where the disturb traffic goes. Needs >= 2
     // whole windows per chunk.
     View dview(int tid, u64 wl, u64 ctr) const {
-        const Chunk& c = chunks[tid];
+        const Chunk& c = layout.chunks[tid];
         View v = view(tid, wl, ctr);
         u64 sv = (u64)(v.base - c.base) / 64, sd = sv + wl;
         if (sd + wl > c.lines)
@@ -123,7 +143,7 @@ struct Run {
         u64 mb = P.num("window_mb", 0);
         if (!mb)
             return 0;
-        u64 wl = (mb << 20) / 64 / T;
+        u64 wl = (mb << 20) / 64 / layout.T;
         wl = wl / 4096 * 4096;
         return std::max<u64>(wl, 4096);
     }
@@ -139,11 +159,11 @@ struct Run {
 
 template <class F>
 void Run::parallel(F fn) {
-    std::barrier<> b(T);
+    std::barrier<> b(layout.T);
     bar = &b;
-    std::atomic<int> running{T};
+    std::atomic<int> running{layout.T};
     std::vector<std::thread> th;
-    for (int t = 0; t < T; t++)
+    for (int t = 0; t < layout.T; t++)
         th.emplace_back([&, t] {
             plat::pin(t);
             fn(t);
@@ -152,32 +172,32 @@ void Run::parallel(F fn) {
             running--;
         });
     double t0 = plat::now(), tl = t0, hb = t0;
-    u64 dl = done.load();
+    u64 dl = progress.done.load();
     while (running.load() > 0) {
         std::this_thread::sleep_for(std::chrono::milliseconds(250));
         double t = plat::now();
-        if (!stop.load() && regionBytes) { // user-set stop criteria: coverage target or time limit
-            if (stopCoverage && vtotal.load() * 100 >= stopCoverage * regionBytes) {
-                stopReason = "coverage target reached";
+        if (!stop.load() && layout.regionBytes) { // user-set stop criteria: coverage target or time limit
+            if (progress.stopCoverage && progress.vtotal.load() * 100 >= progress.stopCoverage * layout.regionBytes) {
+                progress.stopReason = "coverage target reached";
                 stop = true;
-            } else if (stopSeconds > 0 && tStart > 0 && t - tStart >= stopSeconds) {
-                stopReason = "time limit reached";
+            } else if (progress.stopSeconds > 0 && progress.tStart > 0 && t - progress.tStart >= progress.stopSeconds) {
+                progress.stopReason = "time limit reached";
                 stop = true;
             }
         }
         if (t - tl >= 0.5) {
-            u64 d = done.load();
+            u64 d = progress.done.load();
             double rate = (d - dl) / (t - tl) / 1e9;
             tl = t;
             dl = d;
             std::string lab;
             {
-                std::lock_guard<std::mutex> l(mu);
+                std::lock_guard<std::mutex> l(errors.mu);
                 lab = label;
             }
             char buf[220];
             snprintf(buf, sizeof buf, "  [%5.0fs] %-50.50s %5.1f GB/s  cov %4.0f%%  errors: %llu", t - t0, lab.c_str(),
-                     rate, regionBytes ? 100.0 * vtotal.load() / regionBytes : 0.0,
+                     rate, layout.regionBytes ? 100.0 * progress.vtotal.load() / layout.regionBytes : 0.0,
                      (unsigned long long)st.lines.load());
             if (log.console && log.tty) {
                 printf("\r%-118.118s", buf);

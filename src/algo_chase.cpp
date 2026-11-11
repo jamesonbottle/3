@@ -78,7 +78,7 @@ void algo_chase(Run& R, const Params& P) {
                         p[k] = act.w[0];
                     }
                     if (((st + 1) & 0xFFFF) == 0) {
-                        R.done.fetch_add(0x10000ull * 64 * K, std::memory_order_relaxed);
+                        R.progress.done.fetch_add(0x10000ull * 64 * K, std::memory_order_relaxed);
                     }
                 }
                 R.sync();

@@ -25,12 +25,12 @@ void algo_coherency(Run& R, const Params& P) {
     auto lines = P.nums("lines", "2 8 64");
     u64 inc = std::max<u64>(1, P.num("inc", 1000));
     double secs = (double)P.num("seconds", 8);
-    int nt = std::min(R.T, 64);
+    int nt = std::min(R.layout.T, 64);
     std::atomic<bool> fin{false};
     R.parallel([&](int tid) {
         for (u64 L : lines) {
             L = std::min<u64>(std::max<u64>(L, 1), 64);
-            u8* mem = R.region;
+            u8* mem = R.layout.region;
             if (tid == 0) {
                 R.set_label("cache coherency, " + std::to_string(L) + " shared lines, " + std::to_string(nt) +
                             " threads");
@@ -67,7 +67,7 @@ void algo_coherency(Run& R, const Params& P) {
                         a.w[0] = sum & 0xFF;
                         R.report(tid, mem + tid, e, a, "coherency", false);
                     }
-                    R.done.fetch_add(inc * 8, std::memory_order_relaxed);
+                    R.progress.done.fetch_add(inc * 8, std::memory_order_relaxed);
                 }
                 R.sync();
                 if (tid == 0)

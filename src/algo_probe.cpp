@@ -25,7 +25,7 @@ void algo_probe(Run& R, const Params& P) {
     R.parallel([&](int tid) {
         if (tid != 0)
             return; // single thread, rest idle, so measurements are clean
-        const Chunk& c = R.chunks[0];
+        const Chunk& c = R.layout.chunks[0];
         R.set_label("probe: calibrating TSC");
         double t0 = plat::now();
         u64 c0 = __rdtsc();

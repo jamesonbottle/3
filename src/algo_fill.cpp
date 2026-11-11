@@ -67,7 +67,7 @@ void algo_fill(Run& R, const Params& P) {
             const Job& j = jobs[ji];
             if (tid == 0)
                 R.set_label(j.label);
-            View w = R.view(tid, wl, base + ji), vw = R.view(cross ? (tid + 1) % R.T : tid, wl, base + ji);
+            View w = R.view(tid, wl, base + ji), vw = R.view(cross ? (tid + 1) % R.layout.T : tid, wl, base + ji);
             Order ow, ov;
             ow.init(wo.k, w.n, j.stride, 1 + ji, R.salt);
             ov.init(vo.k, vw.n, j.stride, 77 + ji, R.salt);

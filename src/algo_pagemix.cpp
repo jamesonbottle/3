@@ -83,8 +83,8 @@ static void pm_invert(u8* p) {
 void algo_pagemix(Run& R, const Params& P) {
     double secs = (double)P.num("seconds", 30);
     const auto& tab = sat_table();
-    u64 np = R.regionBytes / 4096;
-    if (np < (u64)R.T * 8) {
+    u64 np = R.layout.regionBytes / 4096;
+    if (np < (u64)R.layout.T * 8) {
         R.log.emitf("    pagemix: region too small, skipped\n");
         return;
     }
@@ -129,13 +129,13 @@ void algo_pagemix(Run& R, const Params& P) {
         };
         if (tid == 0)
             R.set_label("page shuffle: fill");
-        for (u64 pg = tid; pg < np && !R.stop; pg += R.T) {
+        for (u64 pg = tid; pg < np && !R.stop; pg += R.layout.T) {
             pp[pg] = pick(nx());
-            u8* a = R.region + pg * 4096;
+            u8* a = R.layout.region + pg * 4096;
             Gen g = gen(pp[pg]);
             pm_fill<1>(a, g, pp[pg].inv);
             filled[pg] = 1;
-            if (((pg / R.T + 1) & 0x3FF) == 0)
+            if (((pg / R.layout.T + 1) & 0x3FF) == 0)
                 R.tick();
             DDR5_INJECT(pagemix_fill_stop, R, tid, pg);
         }
@@ -161,8 +161,8 @@ void algo_pagemix(Run& R, const Params& P) {
                 busy[s].store(0, std::memory_order_release);
                 continue;
             }
-            u8* sa = R.region + s * 4096;
-            u8* da = R.region + d * 4096;
+            u8* sa = R.layout.region + s * 4096;
+            u8* da = R.layout.region + d * 4096;
             PagePat sq = pp[s];
             Gen sg = gen(sq);
             if (op <= 5) {
@@ -171,7 +171,7 @@ void algo_pagemix(Run& R, const Params& P) {
                 else
                     pm_copy<0>(R, tid, sa, da, sg, sq.inv);
                 pp[d] = sq;
-                R.done.fetch_add(8192, std::memory_order_relaxed);
+                R.progress.done.fetch_add(8192, std::memory_order_relaxed);
             } else if (op == 6) {
                 PagePat nq = pick(nx());
                 Gen ng = gen(nq);
@@ -180,19 +180,19 @@ void algo_pagemix(Run& R, const Params& P) {
                 else
                     pm_fill<0>(sa, ng, nq.inv);
                 pp[s] = nq;
-                R.done.fetch_add(4096, std::memory_order_relaxed);
+                R.progress.done.fetch_add(4096, std::memory_order_relaxed);
             } else if (op <= 8) {
                 if (fl)
                     pm_invert<1>(sa);
                 else
                     pm_invert<0>(sa);
-                R.done.fetch_add(4096 * 4, std::memory_order_relaxed);
+                R.progress.done.fetch_add(4096 * 4, std::memory_order_relaxed);
             } else {
                 if (fl)
                     pm_check<1>(R, tid, sa, sg, sq.inv, "pagemix-check");
                 else
                     pm_check<0>(R, tid, sa, sg, sq.inv, "pagemix-check");
-                R.done.fetch_add(4096, std::memory_order_relaxed);
+                R.progress.done.fetch_add(4096, std::memory_order_relaxed);
             }
             if (two)
                 busy[d].store(0, std::memory_order_release);
@@ -203,12 +203,12 @@ void algo_pagemix(Run& R, const Params& P) {
         DDR5_INJECT(pagemix_flip, R, tid);
         if (tid == 0)
             R.set_label("page shuffle: final verify of all pages");
-        for (u64 pg = tid; pg < np; pg += R.T) {
+        for (u64 pg = tid; pg < np; pg += R.layout.T) {
             if (!filled[pg])
                 continue;
             Gen g = gen(pp[pg]);
-            pm_check<1>(R, tid, R.region + pg * 4096, g, pp[pg].inv, "pagemix-final");
-            if (((pg / R.T + 1) & 0x3FF) == 0)
+            pm_check<1>(R, tid, R.layout.region + pg * 4096, g, pp[pg].inv, "pagemix-final");
+            if (((pg / R.layout.T + 1) & 0x3FF) == 0)
                 R.tick();
         }
         R.sync();

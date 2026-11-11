@@ -72,8 +72,8 @@ static void test_windows() {
             if (wl >= lines)
                 continue;
             Run R(test_log);
-            R.T = 1;
-            R.chunks.push_back({fake, lines, 0});
+            R.layout.T = 1;
+            R.layout.chunks.push_back({fake, lines, 0});
             u64 nw = (lines + wl - 1) / wl;
             std::vector<u8> cov(lines, 0);
             for (u64 ctr = 0; ctr < nw; ctr++) {

@@ -107,9 +107,9 @@ int run_suite(const Settings& s, Run& R) {
         }
 
         R.cfg = cfg;
-        R.T = cfg.threads > 0 ? cfg.threads : std::max(1, plat::ncpu());
-        R.stopCoverage = s.coverageStop;
-        R.stopSeconds = s.minutes * 60.0;
+        R.layout.T = cfg.threads > 0 ? cfg.threads : std::max(1, plat::ncpu());
+        R.progress.stopCoverage = s.coverageStop;
+        R.progress.stopSeconds = s.minutes * 60.0;
         R.stop = false;
         const u64 MB2 = 2ull << 20;
         u64 avail = plat::avail_phys(), want;
@@ -122,49 +122,49 @@ int run_suite(const Settings& s, Run& R) {
             R.log.emitf("requested memory exceeds free memory; reduced to %llu MB to avoid paging\n",
                         (unsigned long long)(want >> 20));
         }
-        u64 per = want / R.T / MB2 * MB2;
+        u64 per = want / R.layout.T / MB2 * MB2;
         if (!per) {
             R.log.emitf("not enough memory (need at least 2 MB per thread)\n");
             return 2;
         }
-        u64 total = per * R.T;
+        u64 total = per * R.layout.T;
         bool gotLP = false, locked = false;
-        R.log.emitf("%d threads, testing %.2f GiB of %.2f GiB free, %zu tests\n", R.T, total / 1073741824.0,
+        R.log.emitf("%d threads, testing %.2f GiB of %.2f GiB free, %zu tests\n", R.layout.T, total / 1073741824.0,
                     avail / 1073741824.0, sel.size());
         R.log.emitf("run seed: 0x%016llX (%s)  to reproduce: --seed 0x%016llX with the same -mb and -t\n",
                     (unsigned long long)runSeed, s.seedSet ? "given" : "random", (unsigned long long)runSeed);
-        R.region = (u8*)plat::alloc(total, cfg.large, gotLP, locked);
-        if (!R.region) {
+        R.layout.region = (u8*)plat::alloc(total, cfg.large, gotLP, locked);
+        if (!R.layout.region) {
             R.log.emitf("allocation of %llu MB failed\n", (unsigned long long)(total >> 20));
             return 2;
         }
-        R.regionBytes = total;
+        R.layout.regionBytes = total;
         R.log.emitf("memory %s, large pages: %s\n",
                     locked ? "locked"
                            : "NOT locked (the OS may page parts of it out; close other programs or lower Megabytes)",
                     gotLP       ? "yes (2MB contiguous physical runs)"
                     : cfg.large ? "no (needs 'Lock pages in memory' right; using normal pages)"
                                 : "off");
-        R.chunks.clear();
-        for (int t = 0; t < R.T; t++)
-            R.chunks.push_back({R.region + (u64)t * per, per / 64, (u64)t * (per / 64)});
+        R.layout.chunks.clear();
+        for (int t = 0; t < R.layout.T; t++)
+            R.layout.chunks.push_back({R.layout.region + (u64)t * per, per / 64, (u64)t * (per / 64)});
         R.running = true;
-        R.parallel([&](int tid) { std::memset(R.chunks[tid].base, 0, per); });
+        R.parallel([&](int tid) { std::memset(R.layout.chunks[tid].base, 0, per); });
         // CLI: errors also go to the log file. GUI: the front-end's log sink already writes everything (incl. errors)
         // to its log.
-        R.logf = R.log.sink ? nullptr : fopen(cfg.logFile.c_str(), "a");
-        if (R.logf)
-            fprintf(R.logf, "---- ddr5test run, %.2f GiB, %d threads, seed 0x%016llX ----\n", total / 1073741824.0, R.T,
-                    (unsigned long long)runSeed);
+        R.errors.logf = R.log.sink ? nullptr : fopen(cfg.logFile.c_str(), "a");
+        if (R.errors.logf)
+            fprintf(R.errors.logf, "---- ddr5test run, %.2f GiB, %d threads, seed 0x%016llX ----\n",
+                    total / 1073741824.0, R.layout.T, (unsigned long long)runSeed);
 
         std::atomic<bool> fpuStop{false};
         std::vector<std::thread> fpu;
         if (s.stressFpu)
-            for (int i = 0; i < R.T; i++)
+            for (int i = 0; i < R.layout.T; i++)
                 fpu.emplace_back(fpu_stress, std::ref(fpuStop));
 
         double t0 = plat::now();
-        R.tStart = t0;
+        R.progress.tStart = t0;
         int failedTests = 0;
         std::vector<std::string> failedNames;
         for (u64 loop = 1; (!cfg.loops || loop <= cfg.loops) && !R.stop; loop++) {
@@ -173,10 +173,10 @@ int run_suite(const Settings& s, Run& R) {
                 TestDef& t = sel[ti];
                 R.testName = t.name;
                 R.st.clear();
-                R.done = 0;
-                R.vbytes = 0;
-                R.firstErrTest = -1;
-                R.tTestStart = plat::now();
+                R.progress.done = 0;
+                R.progress.vbytes = 0;
+                R.errors.firstErrTest = -1;
+                R.progress.tTestStart = plat::now();
                 R.set_label(t.name);
                 R.log.emitf("[loop %llu  %zu/%zu] %s\n", (unsigned long long)loop, ti + 1, sel.size(), t.name.c_str());
                 double ts = plat::now();
@@ -184,15 +184,17 @@ int run_suite(const Settings& s, Run& R) {
                 double el = plat::now() - ts;
                 u64 bad = R.st.lines.load();
                 R.log.emitf("    %s  %.1fs  %.1f GB/s avg   coverage this test %.1fx\n",
-                            bad ? "FAIL" : (R.stop ? "STOP" : "pass"), el, R.done.load() / 1e9 / std::max(el, 1e-9),
-                            (double)R.vbytes.load() / (double)total);
+                            bad ? "FAIL" : (R.stop ? "STOP" : "pass"), el,
+                            R.progress.done.load() / 1e9 / std::max(el, 1e-9),
+                            (double)R.progress.vbytes.load() / (double)total);
                 if (bad) {
                     failedTests++;
                     if (std::find(failedNames.begin(), failedNames.end(), t.name) == failedNames.end())
                         failedNames.push_back(t.name);
                     R.log.emitf(
                         "    %llu bad lines, %llu bits; first error %.1f s into this test (%.1f s into the run)\n",
-                        (unsigned long long)bad, (unsigned long long)R.st.bits.load(), R.firstErrTest, R.firstErrRun);
+                        (unsigned long long)bad, (unsigned long long)R.st.bits.load(), R.errors.firstErrTest,
+                        R.errors.firstErrRun);
                     emit_skew("    ", R.st, total, R.log);
                     std::string l1 = "    DQ lane errors  : ";
                     for (int l = 0; l < 32; l++)
@@ -222,25 +224,25 @@ int run_suite(const Settings& s, Run& R) {
         double el = plat::now() - t0;
         R.log.emitf("\nfinished in %.0fs: %s (%llu bad lines, %d failing test runs)%s%s\n", el,
                     R.total.lines ? "ERRORS FOUND" : "no errors", (unsigned long long)R.total.lines.load(), failedTests,
-                    R.stopReason.empty() ? "" : "  - ", R.stopReason.c_str());
+                    R.progress.stopReason.empty() ? "" : "  - ", R.progress.stopReason.c_str());
         R.log.emitf("total coverage: %.1fx of the %.2f GiB tested region verified\n",
-                    (double)R.vtotal.load() / (double)total, total / 1073741824.0);
+                    (double)R.progress.vtotal.load() / (double)total, total / 1073741824.0);
         if (!failedNames.empty()) {
             R.log.emitf("tests with errors:\n");
             for (auto& n : failedNames)
                 R.log.emitf("    %s\n", n.c_str());
         }
         if (R.total.lines) {
-            R.log.emitf("first error: %.1f s into the run   (run seed 0x%016llX)\nwhole run:\n", R.firstErrRun,
+            R.log.emitf("first error: %.1f s into the run   (run seed 0x%016llX)\nwhole run:\n", R.errors.firstErrRun,
                         (unsigned long long)runSeed);
             emit_skew("    ", R.total, total, R.log);
         }
-        if (R.logf) {
-            fclose(R.logf);
-            R.logf = nullptr;
+        if (R.errors.logf) {
+            fclose(R.errors.logf);
+            R.errors.logf = nullptr;
         }
-        plat::release(R.region, total);
-        R.region = nullptr;
+        plat::release(R.layout.region, total);
+        R.layout.region = nullptr;
         R.running = false;
         return R.total.lines ? 1 : 0;
     } catch (const std::exception& e) {

@@ -35,17 +35,17 @@ void Run::report(int tid, const u8* addr, const Line& e, const Line& a, const ch
             st.blk[perblk[k] == 1 ? 0 : perblk[k] == 2 ? 1 : perblk[k] <= 4 ? 2 : 3]++;
     u64 nl = st.lines.fetch_add(1) + 1;
     st.bits += bits;
-    errTotal++;
+    errors.errTotal++;
     double tnow = plat::now();
     {
-        std::lock_guard<std::mutex> l2(mu);
-        if (firstErrTest < 0)
-            firstErrTest = tnow - tTestStart;
-        if (firstErrRun < 0)
-            firstErrRun = tnow - tStart;
+        std::lock_guard<std::mutex> l2(errors.mu);
+        if (errors.firstErrTest < 0)
+            errors.firstErrTest = tnow - progress.tTestStart;
+        if (errors.firstErrRun < 0)
+            errors.firstErrRun = tnow - progress.tStart;
     }
     {
-        u64 off = (u64)(addr - region);
+        u64 off = (u64)(addr - layout.region);
         for (int b = 6; b < 48; b++)
             if ((off >> b) & 1)
                 st.abit[b]++;
@@ -70,16 +70,16 @@ void Run::report(int tid, const u8* addr, const Line& e, const Line& a, const ch
     }
     if (cfg.stopOnErr)
         stop = true;
-    std::lock_guard<std::mutex> l(mu);
-    if (logged >= cfg.maxLog)
+    std::lock_guard<std::mutex> l(errors.mu);
+    if (errors.logged >= cfg.maxLog)
         return;
-    logged++;
+    errors.logged++;
     char buf[1400];
     int o = 0;
     o += snprintf(buf + o, sizeof buf - o,
                   "ERROR t=%.1fs test=\"%s\" %s thr=%d addr=%p beats=0x%04X lanes=0x%08X bits=%llu "
                   "x8-codewords[1b/2b/3-4b/5+b]=%d/%d/%d/%d %s\n",
-                  tnow - tStart, label.c_str(), phase, tid, (const void*)addr, beatmask, lanemask,
+                  tnow - progress.tStart, label.c_str(), phase, tid, (const void*)addr, beatmask, lanemask,
                   (unsigned long long)bits,
                   (int)(perblk[0] == 1) + (perblk[1] == 1) + (perblk[2] == 1) + (perblk[3] == 1),
                   (int)(perblk[0] == 2) + (perblk[1] == 2) + (perblk[2] == 2) + (perblk[3] == 2),
@@ -93,9 +93,9 @@ void Run::report(int tid, const u8* addr, const Line& e, const Line& a, const ch
                          (unsigned long long)e.w[j], (unsigned long long)a.w[j], (unsigned long long)(e.w[j] ^ a.w[j]));
     log.print_clear();
     log.emit(buf);
-    if (logf) {
-        fputs(buf, logf);
-        fflush(logf);
+    if (errors.logf) {
+        fputs(buf, errors.logf);
+        fflush(errors.logf);
     }
 }
 

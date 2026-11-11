@@ -64,8 +64,8 @@ void pagemix_fill_stop(Run& R, int tid, u64 pg) {
 // self-test only: one planted bit flip before the final verify of all pages
 void pagemix_flip(Run& R, int tid) {
     if (tid == 0) {
-        R.region[3 * 4096 + 100] ^= 0x04;
-        _mm_clflush(R.region + 3 * 4096 + 64);
+        R.layout.region[3 * 4096 + 100] ^= 0x04;
+        _mm_clflush(R.layout.region + 3 * 4096 + 64);
         _mm_mfence();
     }
     R.sync();
