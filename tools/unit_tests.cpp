@@ -468,6 +468,27 @@ static void test_hammer_opts() {
                     [](const Params& q) { return hammer_sig(HammerOpts::from(q)); });
 }
 
+// CopyOpts::from(): defaults, the block clamp, method words keep their case (labels print them).
+static std::string copy_sig(const CopyOpts& o) {
+    std::string s = "m";
+    for (auto& v : o.methods)
+        s += v + ",";
+    return s + " block" + std::to_string(o.block);
+}
+static void test_copy_opts() {
+    CHECK(copy_sig(CopyOpts::from(Params())) == "mmemcpy,movsb,ntcopy, block65536", "copy defaults changed: %s",
+          copy_sig(CopyOpts::from(Params())).c_str());
+    Params p;
+    p.m = {{"method", "ntcopy MemCpy"}, {"block", "1K"}};
+    CHECK(copy_sig(CopyOpts::from(p)) == "mntcopy,MemCpy, block1024", "copy options misparsed: %s",
+          copy_sig(CopyOpts::from(p)).c_str());
+    Params tiny;
+    tiny.m = {{"block", "0"}};
+    CHECK(CopyOpts::from(tiny).block == 64, "copy block must clamp to one line");
+    check_opts_keys("Copy", CopyOpts::keys(), {{"block", "4K"}, {"method", "movsb"}},
+                    [](const Params& q) { return copy_sig(CopyOpts::from(q)); });
+}
+
 int main() {
     test_log.sink = [](const std::string& s) {
         printf("  (engine) %s", s.c_str());
@@ -483,6 +504,7 @@ int main() {
     test_fill_opts();
     test_march_opts();
     test_hammer_opts();
+    test_copy_opts();
     if (g_fail) {
         printf("%d check(s) FAILED\n", g_fail);
         return 1;

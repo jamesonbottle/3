@@ -13,11 +13,23 @@
 
 namespace ddr5 {
 
+// ------------------------------------------------------------------ options (the only place copy reads its keys)
+// `window_mb` (Run::window_lines) and the data keys (build_vars) belong to shared helpers.
+const std::set<std::string>& CopyOpts::keys() {
+    static const std::set<std::string> k = {"block", "method"};
+    return k;
+}
+CopyOpts CopyOpts::from(const Params& P) {
+    CopyOpts o;
+    o.methods = P.words("method", "memcpy movsb ntcopy");
+    o.block = std::max<u64>(64, P.num("block", 64 * 1024));
+    return o;
+}
+
 // ------------------------------------------------------------------ algo: copy (real-world bulk copy engines)
 void algo_copy(Run& R, const Params& P) {
     auto vars = build_vars(P, R.salt, R.rng, R.log);
-    auto methods = P.words("method", "memcpy movsb ntcopy");
-    u64 blk = std::max<u64>(64, P.num("block", 64 * 1024));
+    const CopyOpts opt = CopyOpts::from(P);
     u64 wl = R.window_lines(P);
     struct Job {
         std::string label;
@@ -26,7 +38,7 @@ void algo_copy(Run& R, const Params& P) {
     };
     std::vector<Job> jobs;
     for (auto& v : vars)
-        for (auto& m : methods)
+        for (auto& m : opt.methods)
             jobs.push_back({v.label + " via " + m, &v.g, lower(m)});
     u64 base = R.winctr[R.testName];
     R.winctr[R.testName] += jobs.size();
@@ -38,7 +50,7 @@ void algo_copy(Run& R, const Params& P) {
             if (tid == 0)
                 R.set_label("copy " + j.label);
             View w = R.view(tid, wl, base + ji);
-            u64 bl = blk / 64, nA = w.n / 2 / bl * bl;
+            u64 bl = opt.block / 64, nA = w.n / 2 / bl * bl;
             using io = IO<32, 0, 1>;
             u8* A = w.base;
             u8* B = w.base + nA * 64;

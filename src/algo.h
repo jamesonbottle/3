@@ -127,4 +127,12 @@ struct HammerOpts {
     static HammerOpts from(const Params& P);
 };
 
+struct CopyOpts {
+    std::vector<std::string> methods = {"memcpy", "movsb",
+                                        "ntcopy"}; // method: copy engines to run (case kept for labels)
+    u64 block = 64 * 1024;                         // block: bytes per copy call (>= 64)
+    static const std::set<std::string>& keys();
+    static CopyOpts from(const Params& P);
+};
+
 } // namespace ddr5
