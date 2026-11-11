@@ -13,6 +13,27 @@
 
 namespace ddr5 {
 
+// ------------------------------------------------------------------ options (the only place evolve reads its keys)
+// `stride` (stride_list), `window_mb` (Run::window_lines) and the data keys (build_vars) belong to shared helpers.
+const std::set<std::string>& EvolveOpts::keys() {
+    static const std::set<std::string> k = {"cross",  "flush",  "nt",           "order",
+                                            "passes", "period", "verify_order", "width"};
+    return k;
+}
+EvolveOpts EvolveOpts::from(const Params& P, const Logger& log) {
+    EvolveOpts o;
+    o.write = ospec(P, "order", "random", log);
+    o.verify = ospec(P, "verify_order", "seq", log);
+    o.strides = stride_list(P, o.write.k == Order::STRIDE || o.verify.k == Order::STRIDE);
+    o.width = (int)P.num("width", 32);
+    o.nt = P.flag("nt", false);
+    o.flush = P.flag("flush", true);
+    o.cross = P.flag("cross", false);
+    o.passes = std::max<u64>(1, P.num("passes", 16));
+    o.period = std::max<u64>(1, P.num("period", 8));
+    return o;
+}
+
 // ------------------------------------------------------------------ algo: evolve (data that changes from pass to pass)
 // Every other data test writes a pattern once, or rewrites IDENTICAL data (rwstorm), so a write that never lands leaves
 // exactly the bytes the test expects: a lost write is invisible to it. Here every line has its own update period
@@ -26,21 +47,19 @@ namespace ddr5 {
 // rewritten.
 void algo_evolve(Run& R, const Params& P) {
     auto vars = build_vars(P, R.salt, R.rng, R.log); // data = hash: one variant per seed (seeds = N)
-    OrderSpec wo = ospec(P, "order", "random", R.log), vo = ospec(P, "verify_order", "seq", R.log);
-    auto strides = stride_list(P, wo.k == Order::STRIDE || vo.k == Order::STRIDE);
-    int width = (int)P.num("width", 32);
-    bool nt = P.flag("nt", false), fl = P.flag("flush", true), cross = P.flag("cross", false);
-    u64 passes = std::max<u64>(1, P.num("passes", 16)), maxp = std::max<u64>(1, P.num("period", 8)),
-        wl = R.window_lines(P);
+    const EvolveOpts opt = EvolveOpts::from(P, R.log);
+    const OrderSpec &wo = opt.write, &vo = opt.verify;
+    u64 wl = R.window_lines(P);
     struct Job {
         std::string label;
         u64 seed, stride;
     };
     std::vector<Job> jobs;
     for (auto& v : vars)
-        for (u64 s : strides)
-            jobs.push_back({"evolve " + v.label + (strides.size() > 1 ? " stride=" + std::to_string(s * 64) + "B" : ""),
-                            v.g.seed, s});
+        for (u64 s : opt.strides)
+            jobs.push_back(
+                {"evolve " + v.label + (opt.strides.size() > 1 ? " stride=" + std::to_string(s * 64) + "B" : ""),
+                 v.g.seed, s});
     u64 base = R.winctr[R.testName];
     R.winctr[R.testName] += jobs.size();
     R.parallel([&](int tid) {
@@ -50,11 +69,11 @@ void algo_evolve(Run& R, const Params& P) {
             const Job& j = jobs[ji];
             if (tid == 0)
                 R.set_label(j.label);
-            View w = R.view(tid, wl, base + ji), vw = R.view(cross ? (tid + 1) % R.layout.T : tid, wl, base + ji);
+            View w = R.view(tid, wl, base + ji), vw = R.view(opt.cross ? (tid + 1) % R.layout.T : tid, wl, base + ji);
             Order ow, ov;
             ow.init(wo.k, w.n, j.stride, 21 + ji, R.salt);
             ov.init(vo.k, vw.n, j.stride, 55 + ji, R.salt);
-            dispatch(width, nt, fl, [&](auto Wc, auto NTc, auto FLc) {
+            dispatch(opt.width, opt.nt, opt.flush, [&](auto Wc, auto NTc, auto FLc) {
                 using io = IO<decltype(Wc)::value, decltype(NTc)::value, decltype(FLc)::value>;
                 walk(R, ow, wo.rev, [&](u64 i) {
                     Line l;
@@ -63,9 +82,9 @@ void algo_evolve(Run& R, const Params& P) {
                 }); // generation 0 everywhere
                 _mm_sfence();
                 R.sync();
-                for (u64 p = 1; p <= passes && !R.stop; p++) {
+                for (u64 p = 1; p <= opt.passes && !R.stop; p++) {
                     walk(R, ow, wo.rev, [&](u64 i) {
-                        u64 g = w.g + i, per = evo_period(g, j.seed, maxp);
+                        u64 g = w.g + i, per = evo_period(g, j.seed, opt.period);
                         if (p % per)
                             return; // not this line's turn: it must keep its old data
                         Line l;
@@ -74,12 +93,12 @@ void algo_evolve(Run& R, const Params& P) {
                     });
                     _mm_sfence();
                     R.sync();
-                    DDR5_INJECT(evolve_last_pass, R, tid, ji, w, p, passes, j.seed, maxp, &io::store);
+                    DDR5_INJECT(evolve_last_pass, R, tid, ji, w, p, opt.passes, j.seed, opt.period, &io::store);
                     walk(R, ov, vo.rev, [&](u64 i) {
                         const u8* a = vw.base + i * 64;
                         u64 g = vw.g + i;
                         Line e, act;
-                        evo_make(g, p / evo_period(g, j.seed, maxp), j.seed, R.rng, e);
+                        evo_make(g, p / evo_period(g, j.seed, opt.period), j.seed, R.rng, e);
                         R.vtick();
                         if (!io::verify(a, e, act))
                             R.report(tid, a, e, act, "evolve-verify");

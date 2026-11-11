@@ -533,6 +533,35 @@ static void test_rwstorm_opts() {
         [](const Params& q) { return rwstorm_sig(RwstormOpts::from(q, test_log)); });
 }
 
+// EvolveOpts::from(): defaults (writes random, reads seq, 16 passes, periods 1..8), parsing, clamps.
+static std::string evolve_sig(const EvolveOpts& o) {
+    std::string s = std::to_string((int)o.write.k) + (o.write.rev ? "r " : "f ") + std::to_string((int)o.verify.k) +
+                    (o.verify.rev ? "r" : "f") + " s";
+    for (u64 v : o.strides)
+        s += std::to_string(v) + ",";
+    return s + " w" + std::to_string(o.width) + " nt" + std::to_string(o.nt) + " fl" + std::to_string(o.flush) + " x" +
+           std::to_string(o.cross) + " p" + std::to_string(o.passes) + " per" + std::to_string(o.period);
+}
+static void test_evolve_opts() {
+    CHECK(evolve_sig(EvolveOpts::from(Params(), test_log)) == "2f 0f s1, w32 nt0 fl1 x0 p16 per8",
+          "evolve defaults changed: %s", evolve_sig(EvolveOpts::from(Params(), test_log)).c_str());
+    Params p;
+    p.m = {{"order", "stride"}, {"verify_order", "down"}, {"stride", "4K"}, {"width", "16"}, {"nt", "1"},
+           {"flush", "0"},      {"cross", "1"},           {"passes", "0"},  {"period", "0"}};
+    CHECK(evolve_sig(EvolveOpts::from(p, test_log)) == "1f 0r s64, w16 nt1 fl0 x1 p1 per1",
+          "evolve options misparsed: %s", evolve_sig(EvolveOpts::from(p, test_log)).c_str());
+    check_opts_keys("Evolve", EvolveOpts::keys(),
+                    {{"cross", "1"},
+                     {"flush", "0"},
+                     {"nt", "1"},
+                     {"order", "rev"},
+                     {"passes", "9"},
+                     {"period", "3"},
+                     {"verify_order", "random"},
+                     {"width", "64"}},
+                    [](const Params& q) { return evolve_sig(EvolveOpts::from(q, test_log)); });
+}
+
 int main() {
     test_log.sink = [](const std::string& s) {
         printf("  (engine) %s", s.c_str());
@@ -551,6 +580,7 @@ int main() {
     test_copy_opts();
     test_chase_opts();
     test_rwstorm_opts();
+    test_evolve_opts();
     if (g_fail) {
         printf("%d check(s) FAILED\n", g_fail);
         return 1;

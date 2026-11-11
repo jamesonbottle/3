@@ -153,4 +153,17 @@ struct RwstormOpts {
     static RwstormOpts from(const Params& P, const Logger& log);
 };
 
+struct EvolveOpts {
+    OrderSpec write{Order::RANDOM, false}; // order (generation writes)
+    OrderSpec verify;                      // verify_order (default seq)
+    std::vector<u64> strides;              // stride, in lines; {1} unless an order is a stride order
+    int width = 32;
+    bool nt = false, flush = true;
+    bool cross = false; // verify the window of the next thread
+    u64 passes = 16;    // passes (>= 1)
+    u64 period = 8;     // longest update period of a line, in passes (>= 1)
+    static const std::set<std::string>& keys();
+    static EvolveOpts from(const Params& P, const Logger& log);
+};
+
 } // namespace ddr5

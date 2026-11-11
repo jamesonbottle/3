@@ -90,8 +90,7 @@ const Keys& algo_keys(const std::string& algo) {
     static const std::map<std::string, Keys> table = {
         {"fill", keys_of({common, data, window, stride, FillOpts::keys()})},
         {"march", keys_of({common, data, window, stride, MarchOpts::keys()})},
-        {"evolve", keys_of({common, data, window, stride,
-                            Keys{"cross", "flush", "nt", "order", "passes", "period", "verify_order", "width"}})},
+        {"evolve", keys_of({common, data, window, stride, EvolveOpts::keys()})},
         {"rwstorm", keys_of({common, data, window, stride, RwstormOpts::keys()})},
         {"copy", keys_of({common, data, window, CopyOpts::keys()})},
         {"hammer", keys_of({common, data, window, HammerOpts::keys()})},

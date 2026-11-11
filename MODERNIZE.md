@@ -46,7 +46,7 @@ Windows cannot be built in this environment. Windows-only files can be compile-c
 | M4 | Fault-injection hooks out of the algorithms (point 6) | done |
 | M5 | Remove global mutable state (point 1), sub-steps 5a-5c | done |
 | M6 | Split up `Run` (point 3) | done |
-| M7 | Typed, validated test parameters (point 4), sub-steps 7a-7j | partial (7a-7g done) |
+| M7 | Typed, validated test parameters (point 4), sub-steps 7a-7j | partial (7a-7h done) |
 | M8 | Test runner: CTest (+ optional framework) (point 7) | todo |
 
 Order matters: M1 first so later diffs are in the final style; M2 before M5/M6 so new types land in the namespace; M5 before M6 and M7.
@@ -128,7 +128,8 @@ Why: `Params` is `map<string,string>`; a misspelled key in `suite.cfg` is silent
 - [x] **7e `CopyOpts`** (copy).
 - [x] **7f `ChaseOpts`** (chase).
 - [x] **7g `RwstormOpts`** (rwstorm).
-- [ ] **7h-7j Typed structs, one algo per commit**: evolve, probe, pagemix, coherency. Each gets `struct XOpts { ... static XOpts from(const Params&); }` parsed once before `R.parallel`; the algo body uses fields only. Defaults must equal the current `P.num("key", default)` values.
+- [x] **7h `EvolveOpts`** (evolve).
+- [ ] **7i-7j Typed structs, one algo per commit**: probe, pagemix, coherency. Each gets `struct XOpts { ... static XOpts from(const Params&); }` parsed once before `R.parallel`; the algo body uses fields only. Defaults must equal the current `P.num("key", default)` values.
 - [ ] Remove the now-unused `Params` accessors only after the last algo is converted.
 
 Done when: no `P.num/P.str/P.flag/P.words/P.nums` call remains inside an `algo_*.cpp` (only in the `from()` functions); a misspelled key fails `tools/selftest.sh`; gate passes.
@@ -174,3 +175,4 @@ Done when: `ctest` runs both and passes; gate passes.
 - 2026-11-11 M7e done. `CopyOpts` (`method block`; `from(P)`): method words keep their case (the label prints them, the job lowercases them as before), `block` clamps to >= 64. New `test_copy_opts`. Covered by the self-test ("Bulk copy" clean run, coverage-counter and seed-reproduction checks). Gate green: 54 PASS, 0 FAIL, 0 warnings, format clean. Next: 7f (`ChaseOpts`).
 - 2026-11-11 M7f done. `ChaseOpts` (`mlp seeds`; `from(P)`): the empty-`mlp` fallback to {12} and the `seeds >= 1` clamp are in `from()`; only the setup code of `algo_chase` changed, the chain build/walk loops are untouched. New `test_chase_opts`. Covered by the self-test ("Pointer chase" clean run). Gate green: 54 PASS, 0 FAIL, 0 warnings, format clean. Next: 7g (`RwstormOpts`).
 - 2026-11-11 M7g done. `RwstormOpts` (`order verify_order width nt flush passes`, + `stride` via `stride_list`): the writer order defaults to `random`, the reader order to `seq` (NOT to `order`, unlike fill); `passes >= 1`; `from(P, log)` runs right after `build_vars`, so "bad order" lines keep their position. New `test_rwstorm_opts`. Covered by the self-test (the two "Read/write storm" clean runs). Gate green: 54 PASS, 0 FAIL, 0 warnings, format clean. Next: 7h (`EvolveOpts`).
+- 2026-11-11 M7h done. `EvolveOpts` (`order verify_order width nt flush cross passes period`, + `stride` via `stride_list`; defaults: writes `random`, reads `seq`, 16 passes, periods 1..8; `passes`/`period` clamp to >= 1). The `evolve_last_pass` hook now passes `opt.passes` / `opt.period` (same values; the hook signature is unchanged). New `test_evolve_opts`. Gate green incl. the injection build: 54 PASS, 0 FAIL, 0 warnings, injected evolve counts unchanged (2 lines), format clean. Next: 7i (`ProbeOpts`).
