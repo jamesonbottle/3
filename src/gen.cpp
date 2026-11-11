@@ -206,7 +206,7 @@ static std::vector<Var> build_vars_impl(const Params& P, u64 salt, const Logger&
             for (size_t i = 0; i <= tok.size(); i++) {
                 if (i == tok.size() || tok[i] == ':') {
                     if (!c.empty())
-                        vals.push_back((u32)pnum(c));
+                        vals.push_back((u32)P.parse_num("pattern", c));
                     c.clear();
                 } else
                     c += tok[i];

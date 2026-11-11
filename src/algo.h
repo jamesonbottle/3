@@ -30,6 +30,10 @@ const std::map<std::string, AlgoFn>& algos(); // registry: name -> test algorith
 // its algo would silently ignore: a misspelling, or a key meant for another algo. See algo.cpp.
 const std::set<std::string>& algo_keys(const std::string& algo);
 std::vector<std::string> unknown_keys(const TestDef& t);
+// Problems with the VALUES of a test (not a number, not a flag, unknown order, unparsable march element, ...), worded
+// for the user and prefixed with the test name; empty when the test is usable. Called by run_suite before any memory
+// is allocated, and by the unit tests for the whole built-in suite.
+std::vector<std::string> bad_values(const TestDef& t);
 
 // ------------------------------------------------------------------ shared helpers (algo.cpp)
 struct OrderSpec {
@@ -61,7 +65,8 @@ struct MVar {
     std::string label;
     std::vector<MEl> els;
 };
-std::vector<MVar> parse_march_variants(const std::string& str, const Logger& log);
+// `where` (Params::where(), e.g. "test 'x': ") prefixes every message
+std::vector<MVar> parse_march_variants(const std::string& str, const Logger& log, const std::string& where = "");
 
 // ------------------------------------------------------------------ evolving data (algo_evolve.cpp)
 // ------------------------------------------------------------------ algo: evolve (data that changes from pass to pass)

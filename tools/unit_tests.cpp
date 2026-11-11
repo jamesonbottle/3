@@ -614,6 +614,104 @@ static void test_coherency_opts() {
                     [](const Params& q) { return coherency_sig(CoherencyOpts::from(q)); });
 }
 
+// Values, not only keys: a typo such as "4KB" or "ture" must be reported, never silently turned into a number or false.
+static void test_values() {
+    struct Good {
+        const char* s;
+        u64 v;
+    };
+    const Good good[] = {{"4K", 4096},
+                         {"2M", 2ull << 20},
+                         {"1g", 1ull << 30},
+                         {"0x10", 16},
+                         {"0XfF", 255},
+                         {" 7 ", 7},
+                         {"0", 0},
+                         {"18446744073709551615", ~0ull},
+                         {"0xFFFFFFFFFFFFFFFF", ~0ull},
+                         {"17179869183G", 17179869183ull << 30}};
+    for (auto& g : good) {
+        u64 v = 12345;
+        CHECK(pnum_checked(g.s, v) && v == g.v, "pnum_checked('%s') must give %llu", g.s, (unsigned long long)g.v);
+        CHECK(pnum(g.s) == g.v, "pnum('%s') changed for a valid value", g.s);
+    }
+    const char* bad[] = {"",
+                         " ",
+                         "4KB",
+                         "abc",
+                         "0x",
+                         "0xG1",
+                         "1.5G",
+                         "-1",
+                         "+1",
+                         "99999999999999999999",
+                         "0x10000000000000000",
+                         "17179869184G",
+                         "18446744073709551615K",
+                         "K",
+                         "1 2",
+                         "0x10K"};
+    for (const char* b : bad) {
+        u64 v = 777;
+        CHECK(!pnum_checked(b, v), "pnum_checked('%s') must reject it", b);
+        CHECK(pnum(b) == 0, "pnum('%s') must give 0 for a bad value", b);
+    }
+
+    Params p;
+    p.test = "demo";
+    p.m["n"] = "4KB";
+    p.m["ok"] = "4K";
+    p.m["f1"] = "ture";
+    p.m["f2"] = "Yes";
+    p.m["f3"] = "off";
+    p.m["list"] = "4K 12x 2M";
+    CHECK(p.num("ok", 1) == 4096 && p.bad.empty(), "a valid number must not be recorded as bad");
+    CHECK(p.flag("f2", false) && !p.flag("f3", true) && p.bad.empty(), "yes/off are valid flags");
+    CHECK(p.num("n", 9) == 0 && p.bad.size() == 1, "a bad number must read as 0 and be recorded");
+    CHECK(!p.flag("f1", true) && p.bad.size() == 2, "a misspelled flag must read as false and be recorded");
+    CHECK(p.nums("list").size() == 3 && p.bad.size() == 3, "one bad item of a list must be recorded");
+    CHECK(p.bad[0].find("test 'demo': key 'n': '4KB'") == 0, "message must name test, key and value: %s",
+          p.bad[0].c_str());
+
+    // the whole built-in suite is clean, and bad_values() sees the usual mistakes
+    for (auto& t : builtin_suite())
+        for (auto& m : bad_values(t))
+            CHECK(false, "built-in suite: %s", m.c_str());
+    auto mk = [](const char* algo, const char* k, const char* v) {
+        TestDef t;
+        t.name = "bad-demo";
+        t.p.m["algo"] = algo;
+        t.p.m[k] = v;
+        return t;
+    };
+    struct Case {
+        const char* algo;
+        const char* key;
+        const char* val;
+        const char* expect; // text the report must contain
+    };
+    const Case cases[] = {
+        {"evolve", "passes", "4KB", "key 'passes': '4KB'"},
+        {"fill", "nt", "ture", "key 'nt': 'ture'"},
+        {"fill", "order", "bogus", "unknown address order 'bogus'"},
+        {"march", "march", "u(w0) D(abc)", "bad march element 'D(abc)'"},
+        {"march", "march", "u(w0) X(r1.5)", "bad march element 'X(r1.5)'"},
+        {"fill", "stride", "4K 1.5G", "key 'stride': '1.5G'"},
+        {"fill", "window_mb", "-1", "key 'window_mb': '-1'"},
+        {"fill", "pattern", "0xZZ", "key 'pattern': '0xZZ'"},
+        {"hammer", "acts", "99999999999999999999", "key 'acts'"},
+        {"coherency", "seconds", "3s", "key 'seconds': '3s'"},
+    };
+    for (auto& c : cases) {
+        std::vector<std::string> r = bad_values(mk(c.algo, c.key, c.val));
+        bool found = false;
+        for (auto& m : r)
+            found = found || (m.find(c.expect) != std::string::npos && m.find("test 'bad-demo'") != std::string::npos);
+        CHECK(found, "%s %s=%s: bad_values must report '%s' with the test name (got %zu message(s): %s)", c.algo, c.key,
+              c.val, c.expect, r.size(), r.empty() ? "" : r[0].c_str());
+    }
+}
+
 int main() {
     test_log.sink = [](const std::string& s) {
         printf("  (engine) %s", s.c_str());
@@ -626,6 +724,7 @@ int main() {
     test_evolve();
     test_suite_parses();
     test_suite_keys();
+    test_values();
     test_fill_opts();
     test_march_opts();
     test_hammer_opts();

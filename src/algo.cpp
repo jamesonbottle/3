@@ -1,5 +1,6 @@
 // algo.cpp - shared algo helpers and the algo registry (algos()).
 #include "algo.h"
+#include "gen.h"
 #include "lineio.h"
 
 namespace ddr5 {
@@ -7,7 +8,7 @@ namespace ddr5 {
 OrderSpec ospec(const Params& P, const char* key, const char* def, const Logger& log) {
     OrderSpec s;
     if (!Order::parse(P.str(key, def), s.k, s.rev)) {
-        log.emitf("bad %s\n", key);
+        log.emitf("%skey '%s': unknown address order '%s'\n", P.where().c_str(), key, P.str(key, def).c_str());
     }
     return s;
 }
@@ -124,6 +125,54 @@ std::vector<std::string> unknown_keys(const TestDef& t) {
             bad.push_back(k);
     }
     return bad;
+}
+
+// ------------------------------------------------------------------ bad values
+// Runs the option parsing of the test's algo (and the shared helpers it uses) once, on a copy, with every message
+// captured, and returns what it complained about: values that are not numbers / flags, unknown orders, march elements
+// that do not parse, unknown styles. Empty = every value of the test is usable. It reads the same keys the algo will
+// read (it calls the algo's own XOpts::from), so there is no second list of which key holds a number to keep in step.
+std::vector<std::string> bad_values(const TestDef& t) {
+    std::vector<std::string> out;
+    std::string algo = lower(t.p.str("algo", "fill"));
+    if (!algos().count(algo))
+        return out;
+    Params P = t.p;
+    P.test = t.name;
+    P.bad.clear();
+    Logger cap;
+    cap.sink = [&](const std::string& s) {
+        out.push_back(trim(s));
+    };
+    if (algo == "fill")
+        FillOpts::from(P, cap);
+    else if (algo == "march")
+        MarchOpts::from(P, cap);
+    else if (algo == "evolve")
+        EvolveOpts::from(P, cap);
+    else if (algo == "rwstorm")
+        RwstormOpts::from(P, cap);
+    else if (algo == "hammer")
+        HammerOpts::from(P);
+    else if (algo == "copy")
+        CopyOpts::from(P);
+    else if (algo == "chase")
+        ChaseOpts::from(P);
+    else if (algo == "probe")
+        ProbeOpts::from(P);
+    else if (algo == "pagemix")
+        PagemixOpts::from(P);
+    else if (algo == "coherency")
+        CoherencyOpts::from(P);
+    const Keys& mine = algo_keys(algo);
+    if (mine.count("data"))
+        build_vars(P, 0, 0, cap);
+    if (mine.count("stride"))
+        stride_list(P, true); // from() reads it only when an order needs it; a bad value is wrong either way
+    if (mine.count("window_mb"))
+        P.num("window_mb", 0);
+    out.insert(out.end(), P.bad.begin(), P.bad.end());
+    return out;
 }
 
 } // namespace ddr5

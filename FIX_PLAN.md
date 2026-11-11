@@ -26,7 +26,7 @@ Dependencies: S9 (split `run_suite`) comes after S1 (RAII) and S8 (enums). Both 
 | S2  | CLI log open failure          | Reliability | High     | DONE   |
 | S3  | Progress line error count     | Reliability | High     | DONE   |
 | S4  | `report()` hardening          | Rel + Perf  | Low      | TODO   |
-| S5  | Input value validation        | Reliability | Medium   | TODO   |
+| S5  | Input value validation        | Reliability | Medium   | DONE   |
 | S6  | `status()` race + Ctrl-C      | Reliability | Medium   | TODO   |
 | S7  | Platform robustness           | Reliability | Medium   | TODO   |
 | S8  | Enums and named constants     | Readability | Low      | TODO   |
@@ -44,6 +44,7 @@ Dependencies: S9 (split `run_suite`) comes after S1 (RAII) and S8 (enums). Both 
 | 2026-11-12 | S13     | DONE: `R.stop` check before the evolve verify walk; new inject hook `evolve_stop_in_write` (env `DDR5TEST_STOP_IN_EVOLVE`) + selftest case. Without the fix: 3 of 3 runs report 200 false errors (log cap), exit 1; with it: 0 errors, exit 0. Stop paths of the other algos re-audited, no same-shaped bug found |
 | 2026-11-12 | S3      | DONE: progress line prints the run total plus `(this test N)` (`src/run.h`) |
 | 2026-11-12 | S2      | DONE: `Settings::logFileSet`; log opened before the allocation; explicit `--log` that cannot be opened -> exit 2, default name -> warning; README + `--help` updated; selftest group 2d |
+| 2026-11-12 | S5      | DONE: strict `pnum_checked`, bad values recorded and reported by `bad_values()`, `run_suite` refuses to start (exit 2); unit tests for 16 bad / 10 good number forms, flags, the whole suite and 10 planted mistakes |
 
 ---
 
@@ -156,7 +157,7 @@ Cause: in `src/algo_evolve.cpp` the verify walk runs right after the rewrite pas
 
 ## S5. Validate values in test data, not only keys
 
-**Status:** TODO
+**Status:** DONE (2026-11-12). Design: `pnum_checked()` is strict and `pnum()` wraps it; `Params::num/nums/flag/parse_num` record bad values in `Params::bad` (still returning 0/false) and `bad_values(TestDef)` in `algo.cpp` runs each algo's own `XOpts::from` (+ `build_vars`, `stride_list`, `window_mb`) on a copy with the messages captured, so there is no second table of which key is numeric. `run_suite` checks every test in the built-in suite before allocating and exits 2 on any bad value. March `D()`/`X()` values and `ospec` messages now name the test and the value. Checked by planting `"reads": "2x"` in `suite_data.cpp`: unit test fails, CLI exits 2.
 
 **Problem (verified by running).** `pnum()` (`src/params.cpp`) uses `strtoull` with no error check and silently accepts junk:
 

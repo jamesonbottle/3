@@ -70,6 +70,17 @@ int run_suite(const Settings& s, Run& R) {
                     R.log.emitf("test '%s': key '%s' (inherited default) is not used by any algo (ignored)\n",
                                 t.name.c_str(), k.c_str());
             }
+        // a value that is not a number / flag / order would silently become a default: refuse to start instead
+        bool badValue = false;
+        for (const TestDef& t : tests)
+            for (const std::string& m : bad_values(t)) {
+                R.log.emitf("%s\n", m.c_str());
+                badValue = true;
+            }
+        if (badValue) {
+            R.log.emitf("the built-in suite has a bad value (see above); not starting\n");
+            return 2;
+        }
         cfg.threads = s.threads;
         cfg.large = s.largePages;
         cfg.stopOnErr = s.stopOnError;
@@ -95,6 +106,7 @@ int run_suite(const Settings& s, Run& R) {
                 t.p.m["flush"] = s.cacheMode == 1 ? "1" : "0";
                 t.p.m["nt"] = s.cacheMode == 3 ? "1" : "0";
             }
+            t.p.test = t.name; // so a message from the algo's option parsing says which test it is about
             sel.push_back(t);
         }
         if (sel.empty()) {
