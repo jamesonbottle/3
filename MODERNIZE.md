@@ -47,7 +47,7 @@ Windows cannot be built in this environment. Windows-only files can be compile-c
 | M5 | Remove global mutable state (point 1), sub-steps 5a-5c | done |
 | M6 | Split up `Run` (point 3) | done |
 | M7 | Typed, validated test parameters (point 4), sub-steps 7a-7j | done |
-| M8 | Test runner: CTest (+ optional framework) (point 7) | todo |
+| M8 | Test runner: CTest (+ optional framework) (point 7) | partial (CTest done; doctest awaits the owner) |
 
 Order matters: M1 first so later diffs are in the final style; M2 before M5/M6 so new types land in the namespace; M5 before M6 and M7.
 
@@ -141,7 +141,7 @@ Done when: no `P.num/P.str/P.flag/P.words/P.nums` call remains inside an `algo_*
 
 Why: `tools/unit_tests.cpp` uses a homegrown `CHECK` macro and a shell script is the only runner.
 
-- [ ] Register `unit_tests` and the self-test with CTest (`enable_testing()`, `add_test`), so `ctest --output-on-failure` works. `tools/selftest.sh` stays as the full gate.
+- [x] Register `unit_tests` and the self-test with CTest (`enable_testing()`, `add_test`), so `ctest --output-on-failure` works. `tools/selftest.sh` stays as the full gate.
 - [ ] Optional, ask the owner first: vendor `doctest.h` (single header, MIT) under `tools/third_party/` and turn each `test_*` function into a `TEST_CASE`. If declined, record "declined" in the Log and mark this item done after CTest.
 
 Done when: `ctest` runs both and passes; gate passes.
@@ -183,3 +183,4 @@ Done when: `ctest` runs both and passes; gate passes.
 - 2026-11-11 M7j (1/2) done. `PagemixOpts` (`seconds`, default 30; `from(P)`). New `test_pagemix_opts`. Covered by the self-test ("Page shuffle" clean run, the page-shuffle injection checks incl. the stop-in-fill one). Gate green incl. injection build: 54 PASS, 0 FAIL, 0 warnings, format clean. Next: 7j (2/2) `CoherencyOpts`, then remove the unused `Params` accessors.
 - 2026-11-11 M7j (2/2) done. `CoherencyOpts` (`lines inc seconds`; defaults `2 8 64` / 1000 / 8 s; `inc >= 1`). `algo_coherency` copies `inc` and `seconds` into plain locals, so the false-sharing increment loop is unchanged. New `test_coherency_opts`. Covered by the self-test ("Cache coherency" clean run and the coherency injection). Gate green incl. injection build: 54 PASS, 0 FAIL, 0 warnings, format clean. All ten algos now have an `XOpts`; next: remove unused `Params` accessors, tidy the key-table comments, close M7.
 - 2026-11-11 M7 done. Done-when checked: every `P.num/str/flag/words/nums/has` read in `src/algo_*.cpp` is inside an `XOpts::from()` (awk over each file, nothing outside); a misspelled key fails the self-test (mutation check: `reads`, `dwell_ms`, `passes`, `mlp` each renamed in `suite.cfg` + regenerated -> `unit_tests` reports it; all reverted); no `Params` accessor became unused, so none was removed. Key-table comments in `algo.cpp` rewritten (only the helper-owned `common/data/window/stride` sets are still hand-kept there), README layout line mentions the typed options. Gate green: 54 PASS, 0 FAIL, 0 warnings, format clean. Next: M8 (CTest).
+- 2026-11-11 M8 partial. `enable_testing()` + `add_test(unit_tests)` and, on non-Windows, `add_test(selftest)` (runs `tools/selftest.sh` through bash; label `slow`, timeout 1800 s) in `CMakeLists.txt`; README Self-test section mentions `ctest --output-on-failure` (`ctest -LE slow` runs only the unit tests). Verified: `ctest -N` lists both; `ctest -V` from `build/cmake` passed both (selftest 178 s: 54 PASS, 0 FAIL); `tools/format.sh --check` clean. `tools/selftest.sh` itself is unchanged and stays the full gate. NOT done: the optional doctest conversion; the plan says to ask the owner first, so it is open. If declined: write "declined" here and mark M8 done. If accepted: vendor `doctest.h` under `tools/third_party/` and turn each `test_*` into a `TEST_CASE` (one concern per commit).

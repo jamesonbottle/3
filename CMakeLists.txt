@@ -93,6 +93,15 @@ if(WIN32)
   list(APPEND EXES ddr5ramtest)
 endif()
 
+# Tests: `ctest --output-on-failure` (from the build directory). tools/selftest.sh stays the full gate; it builds its own
+# copy of the engine (normal + fault injection) in a temporary directory, so it needs bash, g++ and python3 (Linux).
+enable_testing()
+add_test(NAME unit_tests COMMAND unit_tests)
+if(NOT WIN32)
+  add_test(NAME selftest COMMAND bash "${CMAKE_SOURCE_DIR}/tools/selftest.sh")
+  set_tests_properties(selftest PROPERTIES TIMEOUT 1800 LABELS "slow")
+endif()
+
 foreach(t IN LISTS EXES)
   set_target_properties(${t} PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${DDR5_OUTPUT_DIR}")
   foreach(cfg IN ITEMS DEBUG RELEASE RELWITHDEBINFO MINSIZEREL)
