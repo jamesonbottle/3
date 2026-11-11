@@ -96,7 +96,7 @@ const Keys& algo_keys(const std::string& algo) {
         {"hammer", keys_of({common, data, window, HammerOpts::keys()})},
         {"chase", keys_of({common, window, ChaseOpts::keys()})},
         {"probe", keys_of({common, ProbeOpts::keys()})},
-        {"pagemix", keys_of({common, Keys{"seconds"}})},
+        {"pagemix", keys_of({common, PagemixOpts::keys()})},
         {"coherency", keys_of({common, Keys{"inc", "lines", "seconds"}})}};
     auto i = table.find(algo);
     return i == table.end() ? none : i->second;

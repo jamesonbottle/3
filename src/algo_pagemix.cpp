@@ -80,8 +80,17 @@ static void pm_invert(u8* p) {
             CBAR();
         }
 }
+const std::set<std::string>& PagemixOpts::keys() {
+    static const std::set<std::string> k = {"seconds"};
+    return k;
+}
+PagemixOpts PagemixOpts::from(const Params& P) {
+    PagemixOpts o;
+    o.seconds = (double)P.num("seconds", 30);
+    return o;
+}
 void algo_pagemix(Run& R, const Params& P) {
-    double secs = (double)P.num("seconds", 30);
+    const PagemixOpts opt = PagemixOpts::from(P);
     const auto& tab = sat_table();
     u64 np = R.layout.regionBytes / 4096;
     if (np < (u64)R.layout.T * 8) {
@@ -143,7 +152,7 @@ void algo_pagemix(Run& R, const Params& P) {
         R.sync();
         if (tid == 0)
             R.set_label("page shuffle: copy / invert / refill / check");
-        double end = plat::now() + secs;
+        double end = plat::now() + opt.seconds;
         u64 n = 0;
         while (!R.stop) {
             if ((++n & 63) == 0 && plat::now() >= end)

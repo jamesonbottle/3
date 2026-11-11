@@ -582,6 +582,20 @@ static void test_probe_opts() {
                     [](const Params& q) { return probe_sig(ProbeOpts::from(q)); });
 }
 
+// PagemixOpts::from(): default 30 s, parsing.
+static std::string pagemix_sig(const PagemixOpts& o) {
+    return "sec" + std::to_string((long long)o.seconds);
+}
+static void test_pagemix_opts() {
+    CHECK(pagemix_sig(PagemixOpts::from(Params())) == "sec30", "pagemix default changed: %s",
+          pagemix_sig(PagemixOpts::from(Params())).c_str());
+    Params p;
+    p.m = {{"seconds", "5"}};
+    CHECK(pagemix_sig(PagemixOpts::from(p)) == "sec5", "pagemix seconds misparsed");
+    check_opts_keys("Pagemix", PagemixOpts::keys(), {{"seconds", "7"}},
+                    [](const Params& q) { return pagemix_sig(PagemixOpts::from(q)); });
+}
+
 int main() {
     test_log.sink = [](const std::string& s) {
         printf("  (engine) %s", s.c_str());
@@ -602,6 +616,7 @@ int main() {
     test_rwstorm_opts();
     test_evolve_opts();
     test_probe_opts();
+    test_pagemix_opts();
     if (g_fail) {
         printf("%d check(s) FAILED\n", g_fail);
         return 1;

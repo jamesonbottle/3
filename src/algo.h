@@ -173,4 +173,10 @@ struct ProbeOpts {
     static ProbeOpts from(const Params& P);
 };
 
+struct PagemixOpts {
+    double seconds = 30; // seconds: length of the copy / invert / refill / check phase
+    static const std::set<std::string>& keys();
+    static PagemixOpts from(const Params& P);
+};
+
 } // namespace ddr5
