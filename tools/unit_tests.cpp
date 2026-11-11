@@ -596,6 +596,24 @@ static void test_pagemix_opts() {
                     [](const Params& q) { return pagemix_sig(PagemixOpts::from(q)); });
 }
 
+// CoherencyOpts::from(): defaults (lines 2 8 64, 1000 increments, 8 s), parsing, the inc clamp.
+static std::string coherency_sig(const CoherencyOpts& o) {
+    std::string s = "l";
+    for (u64 v : o.lines)
+        s += std::to_string(v) + ",";
+    return s + " inc" + std::to_string(o.inc) + " sec" + std::to_string((long long)o.seconds);
+}
+static void test_coherency_opts() {
+    CHECK(coherency_sig(CoherencyOpts::from(Params())) == "l2,8,64, inc1000 sec8", "coherency defaults changed: %s",
+          coherency_sig(CoherencyOpts::from(Params())).c_str());
+    Params p;
+    p.m = {{"lines", "4, 16"}, {"inc", "0"}, {"seconds", "2"}};
+    CHECK(coherency_sig(CoherencyOpts::from(p)) == "l4,16, inc1 sec2", "coherency options misparsed: %s",
+          coherency_sig(CoherencyOpts::from(p)).c_str());
+    check_opts_keys("Coherency", CoherencyOpts::keys(), {{"inc", "50"}, {"lines", "4"}, {"seconds", "3"}},
+                    [](const Params& q) { return coherency_sig(CoherencyOpts::from(q)); });
+}
+
 int main() {
     test_log.sink = [](const std::string& s) {
         printf("  (engine) %s", s.c_str());
@@ -617,6 +635,7 @@ int main() {
     test_evolve_opts();
     test_probe_opts();
     test_pagemix_opts();
+    test_coherency_opts();
     if (g_fail) {
         printf("%d check(s) FAILED\n", g_fail);
         return 1;

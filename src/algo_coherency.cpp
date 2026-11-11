@@ -21,14 +21,25 @@ namespace ddr5 {
 // byte). After a round every thread sums its bytes over all lines and compares the low 8 bits with the number of
 // increments it made. A lost or stale write = coherency fault. This exercises the cores' caches and the fabric between
 // them (CCX/CCD, ring), not DRAM cells.
+const std::set<std::string>& CoherencyOpts::keys() {
+    static const std::set<std::string> k = {"inc", "lines", "seconds"};
+    return k;
+}
+CoherencyOpts CoherencyOpts::from(const Params& P) {
+    CoherencyOpts o;
+    o.lines = P.nums("lines", "2 8 64");
+    o.inc = std::max<u64>(1, P.num("inc", 1000));
+    o.seconds = (double)P.num("seconds", 8);
+    return o;
+}
 void algo_coherency(Run& R, const Params& P) {
-    auto lines = P.nums("lines", "2 8 64");
-    u64 inc = std::max<u64>(1, P.num("inc", 1000));
-    double secs = (double)P.num("seconds", 8);
+    const CoherencyOpts opt = CoherencyOpts::from(P);
+    const u64 inc = opt.inc; // plain locals: the increment loop below is the hot path
+    const double secs = opt.seconds;
     int nt = std::min(R.layout.T, 64);
     std::atomic<bool> fin{false};
     R.parallel([&](int tid) {
-        for (u64 L : lines) {
+        for (u64 L : opt.lines) {
             L = std::min<u64>(std::max<u64>(L, 1), 64);
             u8* mem = R.layout.region;
             if (tid == 0) {

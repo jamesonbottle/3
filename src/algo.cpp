@@ -97,7 +97,7 @@ const Keys& algo_keys(const std::string& algo) {
         {"chase", keys_of({common, window, ChaseOpts::keys()})},
         {"probe", keys_of({common, ProbeOpts::keys()})},
         {"pagemix", keys_of({common, PagemixOpts::keys()})},
-        {"coherency", keys_of({common, Keys{"inc", "lines", "seconds"}})}};
+        {"coherency", keys_of({common, CoherencyOpts::keys()})}};
     auto i = table.find(algo);
     return i == table.end() ? none : i->second;
 }

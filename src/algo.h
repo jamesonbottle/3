@@ -179,4 +179,12 @@ struct PagemixOpts {
     static PagemixOpts from(const Params& P);
 };
 
+struct CoherencyOpts {
+    std::vector<u64> lines = {2, 8, 64}; // lines: shared cache lines per round (each clamped to 1..64 by the algo)
+    u64 inc = 1000;                      // inc: increments per thread per round (>= 1)
+    double seconds = 8;                  // seconds per `lines` value
+    static const std::set<std::string>& keys();
+    static CoherencyOpts from(const Params& P);
+};
+
 } // namespace ddr5
