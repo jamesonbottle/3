@@ -222,7 +222,8 @@ struct Run {
     Stats st, total;                  // this test's / the whole run's error statistics
     std::barrier<>* bar = nullptr;    // the barrier of the parallel() in progress (sync() waits on it)
     std::atomic<bool> aborted{false}; // a worker threw: report() ignores what the other workers see from then on
-    std::string label;                // the running test's name for the status line; guarded by errors.mu
+    bool pinWarned = false; // the "could not pin" warning is given once per run, by the thread that calls parallel()
+    std::string label;      // the running test's name for the status line; guarded by errors.mu
 };
 static_assert(!std::is_copy_constructible_v<Run> && !std::is_copy_assignable_v<Run> &&
                   !std::is_move_constructible_v<Run> && !std::is_move_assignable_v<Run>,
@@ -233,6 +234,7 @@ void Run::parallel(F fn) {
     std::barrier<> b(layout.T);
     bar = &b;
     std::atomic<int> running{layout.T};
+    std::atomic<int> unpinned{0}; // workers whose plat::pin() failed
     // Nothing that goes wrong in here may reach std::terminate (a joinable std::thread that is destroyed, or an
     // exception that leaves a thread function). An exception from a worker, from creating the workers or from the
     // monitor loop below is kept (the first one), the run is stopped and marked aborted, every started worker still
@@ -256,7 +258,8 @@ void Run::parallel(F fn) {
         for (int t = 0; t < layout.T; t++) {
             th.emplace_back([&, t] {
                 try {
-                    plat::pin(t);
+                    if (!plat::pin(t))
+                        unpinned++; // not fatal: the test is still valid, the thread just may migrate between cores
                     fn(t);
                 } catch (...) {
                     fail();
@@ -324,6 +327,12 @@ void Run::parallel(F fn) {
         x.join();
     bar = nullptr;
     log.print_clear();
+    if (unpinned.load() > 0 && !pinWarned) { // all workers are joined here, so logging needs no lock
+        pinWarned = true;
+        log.emitf("warning: %d of %d threads could not be pinned to a CPU, so the OS may move them between cores "
+                  "(the results are still valid)\n",
+                  unpinned.load(), layout.T);
+    }
     if (failure)
         std::rethrow_exception(failure);
 }

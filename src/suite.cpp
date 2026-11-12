@@ -154,7 +154,13 @@ int run_suite(const Settings& s, Run& R) {
             want = s.megabytes << 20;
         else
             want = avail / 100 * 90;
-        if (want > avail / 100 * 97) {
+        if (!avail) { // the OS would not say: unknown is not "no memory free"
+            if (!s.megabytes) {
+                R.log.emitf("cannot determine the free memory; give the size to test with -mb\n");
+                return 2;
+            }
+            R.log.emitf("cannot determine the free memory; using the requested size without checking it\n");
+        } else if (want > avail / 100 * 97) {
             want = avail / 100 * 97;
             R.log.emitf("requested memory exceeds free memory; reduced to %llu MB to avoid paging\n",
                         (unsigned long long)(want >> 20));
@@ -166,11 +172,17 @@ int run_suite(const Settings& s, Run& R) {
         }
         u64 total = per * R.layout.T;
         bool gotLP = false, locked = false;
-        R.log.emitf("%d threads, testing %.2f GiB of %.2f GiB free, %zu tests\n", R.layout.T, total / 1073741824.0,
-                    avail / 1073741824.0, sel.size());
+        std::string freeTxt = " (free memory unknown)";
+        if (avail) {
+            freeTxt.clear();
+            appendf(freeTxt, " of %.2f GiB free", avail / 1073741824.0);
+        }
+        R.log.emitf("%d threads, testing %.2f GiB%s, %zu tests\n", R.layout.T, total / 1073741824.0, freeTxt.c_str(),
+                    sel.size());
         R.log.emitf("run seed: 0x%016llX (%s)  to reproduce: --seed 0x%016llX with the same -mb and -t\n",
                     (unsigned long long)runSeed, s.seedSet ? "given" : "random", (unsigned long long)runSeed);
-        R.layout.region = (u8*)plat::alloc(total, cfg.large, gotLP, locked);
+        std::string allocNote;
+        R.layout.region = (u8*)plat::alloc(total, cfg.large, gotLP, locked, allocNote);
         if (!R.layout.region) {
             R.log.emitf("allocation of %llu MB failed\n", (unsigned long long)(total >> 20));
             return 2;
@@ -187,6 +199,8 @@ int run_suite(const Settings& s, Run& R) {
                     gotLP       ? "yes (2MB contiguous physical runs)"
                     : cfg.large ? "no (needs 'Lock pages in memory' right; using normal pages)"
                                 : "off");
+        if (!allocNote.empty())
+            R.log.emitf("note: %s\n", allocNote.c_str());
         R.layout.chunks.clear();
         for (int t = 0; t < R.layout.T; t++)
             R.layout.chunks.push_back({R.layout.region + (u64)t * per, per / 64, (u64)t * (per / 64)});

@@ -4,7 +4,8 @@
 #  1. unit tests       address orders are permutations, windows cover the whole chunk, the built-in suite is valid, every hash mixer avalanches,
 #                      one seed reproduces every random choice, evolving-data generations follow their rules
 #  2. clean runs       the normal build must find NO errors (no false positives), exit code 0. Every run uses a fresh random seed
-#                      (printed as "run seed: 0x..."; a failure prints it so the run can be repeated with --seed); 2c checks the seed itself
+#                      (printed as "run seed: 0x..."; a failure prints it so the run can be repeated with --seed); 2c checks the seed itself;
+#                      2e runs under taskset: the thread count and the pinning must follow the allowed CPUs
 #  3. fault injection  a build with -DDDR5TEST_INJECT plants known bit flips between write and verify (and, in the evolving-data test, a lost
 #                      write); the tester must report exactly those (exit code 1), and must not hang with --stop-on-error
 #
@@ -77,6 +78,34 @@ timeout $TMO "$OUT/cli" $RUN -f "Bulk copy" --log /nonexistent/dir/x.log > "$OUT
 check "explicit --log that cannot be opened: exit 2 with the path and reason, before any test runs" '[ $rc -eq 2 ] && grep -q "cannot open log file '"'"'/nonexistent/dir/x.log'"'"'" "$OUT/logbad.out" && ! grep -q "\[loop" "$OUT/logbad.out" || { cat "$OUT/logbad.out"; false; }'
 mkdir -p "$OUT/rodir"; ( cd "$OUT/rodir" && mkdir ddr5test.log && timeout $TMO "$OUT/cli" $RUN -f "Bulk copy" > "$OUT/logdef.out" 2>&1; echo $? > "$OUT/logdef.rc" )   # a directory named like the default log: fopen fails even as root
 check "default log name that cannot be opened: warns and still exits 0 on a clean run" '[ "$(cat "$OUT/logdef.rc")" = "0" ] && grep -q "cannot open log file '"'"'ddr5test.log'"'"'" "$OUT/logdef.out" && grep -q "continuing without it" "$OUT/logdef.out" || { cat "$OUT/logdef.out"; false; }'
+
+echo "== 2e. CPU restriction: thread count and pinning follow taskset, not the machine's CPU count"
+# the CPUs this script may use, one number per line (a taskset or cpuset limit on the script itself is respected)
+allowed=$(taskset -pc $$ 2>/dev/null | sed 's/.*: //' | awk -F, '{for (i = 1; i <= NF; i++) { n = split($i, r, "-"); if (n == 2) for (j = r[1]; j <= r[2]; j++) print j; else print $i } }')
+# start the tester on CPUs $1 and $2 with two workers; true once one worker sits on CPU $1 alone and one on CPU $2 alone
+workers_pinned() {
+  taskset -c "$1,$2" "$OUT/cli" -mb 64 -t 2 --no-large-pages --test-seconds 8 -f "Address-in-address" --log "$OUT/pin.log" > "$OUT/pin.out" 2>&1 &
+  local p=$! i m rc=1 t
+  for i in $(seq 1 40); do
+    kill -0 $p 2>/dev/null || break
+    m=$(for t in /proc/$p/task/*; do sed -n 's/^Cpus_allowed_list:[[:space:]]*//p' "$t/status" 2>/dev/null; done)
+    if echo "$m" | grep -qx "$1" && echo "$m" | grep -qx "$2"; then rc=0; break; fi
+    sleep 0.2
+  done
+  kill $p 2>/dev/null; wait $p 2>/dev/null
+  return $rc
+}
+if [ "$(echo "$allowed" | grep -c .)" -ge 2 ]; then
+  two=$(echo "$allowed" | head -2 | paste -sd, -); one=$(echo "$allowed" | head -1)
+  # no -t: the default thread count is what the process may use, so it must follow the restriction
+  check "taskset -c $two: 2 threads by default, clean run, every thread pinned" 'taskset -c $two timeout $TMO "$OUT/cli" -mb 64 --no-large-pages --test-seconds 3 -f "Address-in-address" --log "$OUT/ts2.log" > "$OUT/ts2.out" 2>&1; rc=$?; [ $rc -eq 0 ] && grep -q "^2 threads," "$OUT/ts2.out" && ! grep -q "could not be pinned" "$OUT/ts2.out" && ! grep -q "^ERROR" "$OUT/ts2.log" 2>/dev/null || { echo "    rc=$rc"; head -3 "$OUT/ts2.out"; false; }'
+  check "taskset -c $one: 1 thread by default, clean run" 'taskset -c $one timeout $TMO "$OUT/cli" -mb 64 --no-large-pages --test-seconds 3 -f "Address-in-address" --log "$OUT/ts1.log" > "$OUT/ts1.out" 2>&1; rc=$?; [ $rc -eq 0 ] && grep -q "^1 threads," "$OUT/ts1.out" && ! grep -q "^ERROR" "$OUT/ts1.log" 2>/dev/null || { echo "    rc=$rc"; head -3 "$OUT/ts1.out"; false; }'
+  # the two highest allowed CPUs: on a machine with more than two CPUs these are not CPUs 0 and 1
+  top1=$(echo "$allowed" | tail -2 | head -1); top2=$(echo "$allowed" | tail -1)
+  check "workers are pinned one per allowed CPU ($top1 and $top2)" 'workers_pinned $top1 $top2 || { echo "    thread CPU lists never showed one worker each on $top1 and $top2"; head -3 "$OUT/pin.out"; false; }'
+else
+  echo "  SKIP  taskset not available, or fewer than 2 usable CPUs"
+fi
 
 echo "== 3. fault injection: planted faults must be found"
 log="$OUT/inj_fill.log"; rm -f "$log"

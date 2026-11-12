@@ -28,7 +28,7 @@ Dependencies: S9 (split `run_suite`) comes after S1 (RAII) and S8 (enums). Both 
 | S4  | `report()` hardening          | Rel + Perf  | Low      | DONE   |
 | S5  | Input value validation        | Reliability | Medium   | DONE   |
 | S6  | `status()` race + Ctrl-C      | Reliability | Medium   | DONE   |
-| S7  | Platform robustness           | Reliability | Medium   | TODO   |
+| S7  | Platform robustness           | Reliability | Medium   | DONE   |
 | S8  | Enums and named constants     | Readability | Low      | TODO   |
 | S9  | Split `run_suite`             | Readability | Low      | TODO   |
 | S10 | Remove duplication            | Readability | Low      | TODO   |
@@ -48,6 +48,7 @@ Dependencies: S9 (split `run_suite`) comes after S1 (RAII) and S8 (enums). Both 
 | 2026-11-12 | S6      | DONE: atomics for the fields `status()` reads, no `R.stop = false`, double Ctrl-C (POSIX `SA_RESETHAND`, Windows `ExitProcess(130)`), README and `--help` updated, unit test for the status poll and for an early Stop |
 | 2026-11-12 | S1      | DONE: `ScopeExit` guards in `run_suite`, exception-safe `Run::parallel` (rethrow after join, barrier slots dropped, `aborted` flag), `catch (...)`; unit tests + inject selftest for exit code 3 |
 | 2026-11-12 | S4      | DONE: `appendf` (log.h) grows a `std::string` instead of clamping a fixed buffer, used by `report()` and `Logger::emitf`; first-error times and `errors.logged` atomic, `report()` returns before `errors.mu` once `maxLog` blocks are written; `Counter` (one cache line each) for `lane`/`beat`/`abit`; `test_report` in `tools/unit_tests.cpp` |
+| 2026-11-12 | S7      | DONE on Linux, Windows part unbuilt: `ncpu()`/`pin()` follow `sched_getaffinity` (taskset), `pin()` returns bool and `Run::parallel` warns once, `avail_phys()` from `MemAvailable` with 0 = unknown handled in `run_suite`, `plat::alloc` returns a `note` (why memory is not locked), Windows API results checked; selftest group 2e |
 
 ---
 
@@ -210,7 +211,7 @@ Cause: in `src/algo_evolve.cpp` the verify walk runs right after the rewrite pas
 
 ## S7. Platform robustness
 
-**Status:** TODO
+**Status:** DONE on Linux (2026-11-12); the Windows half is written but NOT compiled or run (no Windows toolchain in the session). POSIX: `allowed_cpus()` reads `sched_getaffinity` once (falls back to `hardware_concurrency()` only if that fails), `ncpu()` is its size, `pin(i)` pins to the i-th allowed CPU (wrapping) and returns whether it worked; `avail_phys()` reads `MemAvailable` and falls back to `sysconf`, where a `-1` now gives 0. `0` means "unknown" (documented in `platform.h`): `run_suite` then asks for `-mb` instead of reading it as "no memory free" (with `-mb` it runs, saying the size is unchecked). `Run::parallel` counts the workers whose `pin()` failed and warns once per run after they have joined. Deviation: `plat::alloc` got a `std::string& note` parameter so the platform layer can say why memory could not be locked (POSIX: the `mlock` errno, Windows: the `SetProcessWorkingSetSizeEx` / `VirtualLock` error code) - it has no logger of its own. Windows: `GlobalMemoryStatusEx` failure gives 0 (unknown), `pin()` returns false for `cpu >= 64` on a single group and for a failed call. Selftest group 2e (`taskset` on the first two / first allowed CPUs: 2 threads / 1 thread by default, clean run, no pin warning; two workers each pinned to one of the top two allowed CPUs). Checked: the previous build fails the 1-thread case (starts 2 threads under `taskset -c 0`); forcing `pin()` to fail gives exactly one warning and a valid run; forcing `avail_phys()` to 0 gives the `-mb` message / unchecked run. Limits: on this 2-CPU machine the pinning check cannot tell old from new (it only does with more than 2 CPUs); a failing `pthread_setaffinity_np` cannot be provoked naturally, so that path was only checked by forcing it; containers' cgroup memory limits are still not considered (`MemAvailable` is the host's); `main_gui.cpp` still calls `GlobalMemoryStatusEx` itself and ignores its result.
 
 **Problem**
 - POSIX `pin()` uses `cpu % CPU_SETSIZE` and ignores the return value; `ncpu()` uses `hardware_concurrency()`, which ignores `taskset`/cpusets (**verified by running**: under `taskset -c 0`, `nproc` says 1 but `hardware_concurrency()` says 2 and the CLI still starts 2 threads).
