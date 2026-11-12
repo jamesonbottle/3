@@ -238,8 +238,8 @@ int run_suite(const Settings& s, Run& R) {
                         failedNames.push_back(t.name);
                     R.log.emitf(
                         "    %llu bad lines, %llu bits; first error %.1f s into this test (%.1f s into the run)\n",
-                        (unsigned long long)bad, (unsigned long long)R.st.bits.load(), R.errors.firstErrTest,
-                        R.errors.firstErrRun);
+                        (unsigned long long)bad, (unsigned long long)R.st.bits.load(), R.errors.firstErrTest.load(),
+                        R.errors.firstErrRun.load());
                     emit_skew("    ", R.st, total, R.log);
                     std::string l1 = "    DQ lane errors  : ";
                     for (int l = 0; l < 32; l++)
@@ -276,8 +276,8 @@ int run_suite(const Settings& s, Run& R) {
                 R.log.emitf("    %s\n", n.c_str());
         }
         if (R.total.lines) {
-            R.log.emitf("first error: %.1f s into the run   (run seed 0x%016llX)\nwhole run:\n", R.errors.firstErrRun,
-                        (unsigned long long)runSeed);
+            R.log.emitf("first error: %.1f s into the run   (run seed 0x%016llX)\nwhole run:\n",
+                        R.errors.firstErrRun.load(), (unsigned long long)runSeed);
             emit_skew("    ", R.total, total, R.log);
         }
         return R.total.lines ? 1 : 0;   // the guards stop the FPU threads, release the region and close the log

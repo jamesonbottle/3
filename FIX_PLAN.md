@@ -25,7 +25,7 @@ Dependencies: S9 (split `run_suite`) comes after S1 (RAII) and S8 (enums). Both 
 | S1  | RAII + worker exceptions      | Reliability | Medium   | DONE   |
 | S2  | CLI log open failure          | Reliability | High     | DONE   |
 | S3  | Progress line error count     | Reliability | High     | DONE   |
-| S4  | `report()` hardening          | Rel + Perf  | Low      | TODO   |
+| S4  | `report()` hardening          | Rel + Perf  | Low      | DONE   |
 | S5  | Input value validation        | Reliability | Medium   | DONE   |
 | S6  | `status()` race + Ctrl-C      | Reliability | Medium   | DONE   |
 | S7  | Platform robustness           | Reliability | Medium   | TODO   |
@@ -47,6 +47,7 @@ Dependencies: S9 (split `run_suite`) comes after S1 (RAII) and S8 (enums). Both 
 | 2026-11-12 | S5      | DONE: strict `pnum_checked`, bad values recorded and reported by `bad_values()`, `run_suite` refuses to start (exit 2); unit tests for 16 bad / 10 good number forms, flags, the whole suite and 10 planted mistakes |
 | 2026-11-12 | S6      | DONE: atomics for the fields `status()` reads, no `R.stop = false`, double Ctrl-C (POSIX `SA_RESETHAND`, Windows `ExitProcess(130)`), README and `--help` updated, unit test for the status poll and for an early Stop |
 | 2026-11-12 | S1      | DONE: `ScopeExit` guards in `run_suite`, exception-safe `Run::parallel` (rethrow after join, barrier slots dropped, `aborted` flag), `catch (...)`; unit tests + inject selftest for exit code 3 |
+| 2026-11-12 | S4      | DONE: `appendf` (log.h) grows a `std::string` instead of clamping a fixed buffer, used by `report()` and `Logger::emitf`; first-error times and `errors.logged` atomic, `report()` returns before `errors.mu` once `maxLog` blocks are written; `Counter` (one cache line each) for `lane`/`beat`/`abit`; `test_report` in `tools/unit_tests.cpp` |
 
 ---
 
@@ -136,7 +137,7 @@ Cause: in `src/algo_evolve.cpp` the verify walk runs right after the rewrite pas
 
 ## S4. Harden `Run::report` (buffer math, lock contention, counters)
 
-**Status:** TODO
+**Status:** DONE (2026-11-12). Deviation from step 1/2: instead of a clamped `append` on a fixed buffer, one `appendf(std::string&, fmt, ...)` in `log.h/.cpp` that grows the string to fit. It removes the wrap and also the truncation (a long test name no longer costs the qword lines after it), and `Logger::emitf` uses the same helper, so the 2048-byte cut is gone too; the string is only built for the first `maxLog` (default 200) errors, so the allocation does not matter. Step 3: `errors.firstErrRun/firstErrTest` are `std::atomic<double>` set with compare-exchange (`run_suite` still resets `firstErrTest` between tests, with no worker running), `errors.logged` is atomic, and `report()` checks it before taking `errors.mu`, then again under the lock; the lock is now taken only to write a block. Step 4: `Counter` (`alignas(64)`, derives from `std::atomic<u64>`, so call sites are unchanged) for `lane`, `beat` and `abit`. Step 5: `test_report` (worst-case block with a 3000-character test name, exact text of all 9 lines; `appendf`/`emitf` with 5000 characters; 4 threads x 100 errors give 400 counted and exactly `maxLog` well-formed blocks). Checked by planting faults: a truncating `appendf` fails 11 checks, removing the `maxLog` limit fails the block count. `selftest.sh` passes with the fault-injection counts unchanged (42 lines / 44 bits), the unit tests are clean under TSan (0 warnings). Not measured: the contention gain itself (no benchmark of an error storm).
 
 **Problem**
 - `o += snprintf(buf + o, sizeof buf - o, ...)` can wrap if the output ever exceeds 1400 bytes: `snprintf` returns the would-be length, and `sizeof buf - o` then underflows to a huge value, which turns truncation into an overflow. Safe today (the longest message is ~1.1 KB), fragile if the label or fields grow.

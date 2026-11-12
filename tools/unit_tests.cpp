@@ -845,6 +845,94 @@ static void test_run_status() {
     }
 }
 
+// Run::report and the Logger formatting helpers. The error block is built in a string that grows to fit (a fixed buffer
+// would cut a long test name and lose the qword lines after it, or overrun), and once the log holds maxLog blocks
+// report() still counts every error but writes nothing more.
+static void test_report() {
+    // appendf / emitf: output longer than any fixed buffer arrives whole
+    {
+        std::string s = "head:";
+        appendf(s, "%s|%d", std::string(5000, 'q').c_str(), 42);
+        CHECK(s == "head:" + std::string(5000, 'q') + "|42", "appendf lost or cut text (%zu bytes)", s.size());
+        std::string small;
+        appendf(small, "%d-%s", 7, "ab");
+        CHECK(small == "7-ab", "appendf short output wrong: '%s'", small.c_str());
+        std::string got;
+        Logger lg;
+        lg.sink = [&](const std::string& t) {
+            got = t;
+        };
+        lg.emitf("[%s]", std::string(3000, 'z').c_str());
+        CHECK(got == "[" + std::string(3000, 'z') + "]", "emitf cut a long message (%zu bytes)", got.size());
+    }
+    alignas(64) static u8 mem[64 * 8];
+    Line e, a; // worst case: every qword differs, in every bit
+    for (int j = 0; j < 8; j++) {
+        e.w[j] = 0x0123456789ABCDEFull * (u64)(j + 1);
+        a.w[j] = ~e.w[j];
+    }
+    // one error with a very long test name: the whole header and all 8 qword lines must be there, well formed
+    {
+        std::vector<std::string> blocks;
+        Logger lg;
+        lg.sink = [&](const std::string& t) {
+            blocks.push_back(t);
+        };
+        Run R(lg);
+        R.layout.region = mem;
+        const std::string name(3000, 'n');
+        R.set_label(name);
+        R.report(2, mem + 64, e, a, "verify", false);
+        CHECK(blocks.size() == 1, "one error must give one block, got %zu", blocks.size());
+        if (blocks.size() == 1) {
+            const std::string& b = blocks[0];
+            std::vector<std::string> lines;
+            std::stringstream ss(b);
+            for (std::string l; std::getline(ss, l);)
+                lines.push_back(l);
+            CHECK(!b.empty() && b.back() == '\n', "the block must end with a newline");
+            CHECK(lines.size() == 9, "header + 8 qword lines expected, got %zu lines", lines.size());
+            CHECK(!lines.empty() && lines[0].rfind("ERROR t=", 0) == 0 &&
+                      lines[0].find("test=\"" + name + "\" verify thr=2 ") != std::string::npos &&
+                      lines[0].find("bits=512 ") != std::string::npos &&
+                      lines[0].find("x8-codewords[1b/2b/3-4b/5+b]=0/0/0/4 (logical check") != std::string::npos,
+                  "header cut or malformed: '%.160s'", lines.empty() ? "" : lines[0].c_str());
+            for (int j = 0; j < 8 && (size_t)j + 1 < lines.size(); j++) {
+                char want[128];
+                snprintf(want, sizeof want, "      qword %d: exp=%016llX act=%016llX xor=%016llX", j,
+                         (unsigned long long)e.w[j], (unsigned long long)a.w[j], (unsigned long long)~0ull);
+                CHECK(lines[(size_t)j + 1] == want, "qword line %d wrong: '%s'", j, lines[(size_t)j + 1].c_str());
+            }
+        }
+        CHECK(R.error_count() == 1, "error_count %llu", (unsigned long long)R.error_count());
+    }
+    // 4 threads report 100 errors each: every error is counted, exactly maxLog blocks are written, none interleaved
+    {
+        const u64 maxLog = Cfg().maxLog;
+        std::vector<std::string> blocks; // the sink runs under the Run's lock, so it needs none of its own
+        Logger lg;
+        lg.sink = [&](const std::string& t) {
+            blocks.push_back(t);
+        };
+        Run R(lg);
+        R.layout.region = mem;
+        R.set_label("report storm");
+        R.layout.T = 4;
+        R.parallel([&](int tid) {
+            for (int i = 0; i < 100; i++)
+                R.report(tid, mem + 64 * (size_t)((tid + i) % 8), e, a, "verify", false);
+        });
+        CHECK(R.error_count() == 400, "every error must be counted, got %llu", (unsigned long long)R.error_count());
+        CHECK(blocks.size() == maxLog, "exactly maxLog (%llu) blocks must be written, got %zu",
+              (unsigned long long)maxLog, blocks.size());
+        for (const std::string& b : blocks)
+            if (b.rfind("ERROR t=", 0) != 0 || std::count(b.begin(), b.end(), '\n') != 9) {
+                CHECK(false, "a block is malformed or interleaved: '%.120s'", b.c_str());
+                break;
+            }
+    }
+}
+
 int main() {
     test_log.sink = [](const std::string& s) {
         printf("  (engine) %s", s.c_str());
@@ -860,6 +948,7 @@ int main() {
     test_values();
     test_run_status();
     test_exceptions();
+    test_report();
     test_fill_opts();
     test_march_opts();
     test_hammer_opts();

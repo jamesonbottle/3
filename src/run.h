@@ -31,8 +31,17 @@ struct View {
     u64 g;
     u64 n;
 };
+// A shared counter alone on its cache line: during an error storm the threads bump the lane/beat/address-bit counters
+// they hit, and counters that merely sit next to each other must not bounce a line between the cores.
+struct alignas(64) Counter : std::atomic<u64> {
+    Counter() : std::atomic<u64>(0) {}
+    using std::atomic<u64>::operator=;
+};
+static_assert(sizeof(Counter) == 64, "one counter per cache line");
+
 struct Stats {
-    std::atomic<u64> lines{0}, bits{0}, lane[32], beat[16], blk[4], abit[48], trans{0}, stable{0}, unstable{0};
+    std::atomic<u64> lines{0}, bits{0}, blk[4], trans{0}, stable{0}, unstable{0};
+    Counter lane[32], beat[16], abit[48]; // the hot ones: every error bumps several of them
     Stats() { clear(); }
     void clear() {
         lines = 0;
@@ -74,13 +83,16 @@ struct Progress {
     std::string stopReason;
 };
 
-// Error reporting: the log file, the "first error" times, the counters. `mu` serializes Run::report and also guards
-// Run::label (the status line reads it from the GUI thread).
+// Error reporting: the log file, the "first error" times, the counters. Only the text output needs `mu`: it serializes
+// the log lines Run::report writes (so they do not interleave) and also guards Run::label (the status line reads it
+// from the GUI thread). The counters and the "first error" times are lock-free.
 struct ErrorSink {
     mutable std::mutex mu; // mutable: Run::status() is const but has to lock it
     FILE* logf = nullptr;
-    u64 logged = 0;
-    double firstErrRun = -1, firstErrTest = -1; // seconds into the run / the current test; -1 = no error yet
+    std::atomic<u64> logged{0}; // error blocks written so far; once it reaches Cfg::maxLog report() stops taking `mu`
+    // seconds into the run / the current test; -1 = no error yet. Set once, by whichever thread gets there first
+    // (compare-exchange); run_suite resets firstErrTest between tests, when no worker is running.
+    std::atomic<double> firstErrRun{-1}, firstErrTest{-1};
     std::atomic<u64> errTotal{0};
 };
 
