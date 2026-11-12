@@ -165,7 +165,8 @@ void algo_march(Run& R, const Params& P) {
                                  (opt.orders.size() > 1 || on.second.k != Order::SEQ || on.second.rev
                                       ? " order=" + on.first
                                       : "") +
-                                 (on.second.k == Order::STRIDE ? " stride=" + std::to_string(s * 64) + "B" : "") +
+                                 (on.second.k == Order::STRIDE ? " stride=" + std::to_string(s * kLineBytes) + "B"
+                                                               : "") +
                                  (opt.bursts.size() > 1 || b > 1 ? " burst=" + std::to_string(b) : ""),
                              &v.g, mi, on.second, s, b});
             }
@@ -203,7 +204,7 @@ void algo_march(Run& R, const Params& P) {
                     }
                     bool down = (e.dir == 'v' || e.dir == 'V') != j.os.rev;
                     auto apply = [&](const MOp& op, u64 i) {
-                        u8* a = w.base + i * 64;
+                        u8* a = w.base + i * kLineBytes;
                         Line l;
                         j.g->make(w.g + i, a, op.v != 0, l);
                         if (op.t == 'w')
@@ -223,9 +224,9 @@ void algo_march(Run& R, const Params& P) {
                             for (u64 q = q0; q < qe; q++)
                                 apply(op, o.pos(q, down));
                         cnt += qe - q0;
-                        if (cnt >= 0x10000) {
+                        if (cnt >= kTickLines) {
                             R.tick();
-                            cnt -= 0x10000;
+                            cnt -= kTickLines;
                         }
                     }
                     _mm_sfence();

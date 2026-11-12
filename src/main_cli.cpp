@@ -100,7 +100,7 @@ int main(int argc, char** argv) {
         else if (a == "-f")
             s.filter = nx();
         else if (a == "--quick")
-            s.suite = 1;
+            s.suite = SuiteSet::Quick;
         else if (a == "--coverage")
             s.coverageStop = num(BIG >> 8);
         else if (a == "--minutes") {
@@ -117,11 +117,11 @@ int main(int argc, char** argv) {
         else if (a == "--cache") {
             int k = choice({"default", "bypass", "cached", "nt"});
             if (k >= 0)
-                s.cacheMode = k;
+                s.cacheMode = (CacheMode)k; // same order as the enum
         } else if (a == "--rng") {
             int k = choice({"default", "splitmix", "murmur", "xorshift"});
             if (k >= 0)
-                s.rngMode = k;
+                s.rngMode = (Rng)k; // same order as the enum
         } else if (a ==
                    "--seed") { // any 64-bit value, decimal or 0x hex (the run prints its seed in exactly this form)
             std::string v = nx();

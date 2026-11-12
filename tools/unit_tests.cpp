@@ -122,7 +122,7 @@ static void test_generators() {
     g.make(7, nullptr, false, a);
     g.make(7, nullptr, false, b);
     g.make(7, nullptr, true, c);
-    bool same = !memcmp(&a, &b, 64), comp = true;
+    bool same = !memcmp(&a, &b, kLineBytes), comp = true;
     for (int j = 0; j < 8; j++)
         comp &= (c.w[j] == ~a.w[j]);
     CHECK(same, "hash data must be a pure function of the line index");
@@ -141,6 +141,7 @@ static void test_generators() {
 // samples put the noise at ~0.006, so 0.06 cannot fail by chance.
 static void test_mixers() {
     const char* names[] = {"splitmix64", "murmur3 fmix64", "xorshift64*"};
+    const Rng rngs[] = {Rng::SplitMix, Rng::Murmur, Rng::XorShift};
     const int N = 8192;
     static u32 cnt[64][64];
     for (int mode = 0; mode < 3; mode++) {
@@ -148,9 +149,9 @@ static void test_mixers() {
         u64 rs = 0x1234;
         for (int n = 0; n < N; n++) {
             rs = splitmix(rs);
-            u64 h0 = mix64(rs, mode);
+            u64 h0 = mix64(rs, rngs[mode]);
             for (int i = 0; i < 64; i++) {
-                u64 d = h0 ^ mix64(rs ^ (1ull << i), mode);
+                u64 d = h0 ^ mix64(rs ^ (1ull << i), rngs[mode]);
                 for (int j = 0; j < 64; j++)
                     cnt[i][j] += (d >> j) & 1;
             }
@@ -186,7 +187,7 @@ static void test_seed() {
     auto sig = [&](u64 seed, u64 loop) {
         u64 salt = salt_for(seed, loop);
         Sig s;
-        for (auto& v : build_vars(p, salt, 0, test_log))
+        for (auto& v : build_vars(p, salt, Rng::Default, test_log))
             s.hash.push_back(v.g.seed);
         Order o;
         o.init(Order::RANDOM, 5000, 1, 1, salt);
@@ -232,22 +233,24 @@ static void test_evolve() {
         CHECK(hist[per] > lines / maxp * 3 / 4 && hist[per] < lines / maxp * 5 / 4,
               "period %llu chosen by %llu of %llu lines (expected ~%llu)", (unsigned long long)per,
               (unsigned long long)hist[per], (unsigned long long)lines, (unsigned long long)(lines / maxp));
+    const Rng rngs[] = {Rng::SplitMix, Rng::Murmur, Rng::XorShift};
     for (int mode = 0; mode < 3;
          mode++) { // the data follows the selected RNG, so every mixer must keep (line, generation) pairs apart
         std::set<u64> seen;
         Line a{}, b{}, c{};
-        evo_make(7, 3, seed, mode, a);
-        evo_make(7, 3, seed, mode, b);
-        evo_make(7, 2, seed, mode, c);
-        CHECK(!memcmp(&a, &b, 64), "rng %d: evolving data must be a pure function of (line, generation, seed)", mode);
-        CHECK(memcmp(&a, &c, 64) != 0,
+        evo_make(7, 3, seed, rngs[mode], a);
+        evo_make(7, 3, seed, rngs[mode], b);
+        evo_make(7, 2, seed, rngs[mode], c);
+        CHECK(!memcmp(&a, &b, kLineBytes), "rng %d: evolving data must be a pure function of (line, generation, seed)",
+              mode);
+        CHECK(memcmp(&a, &c, kLineBytes) != 0,
               "rng %d: the previous generation must differ from the new one (otherwise a lost write goes unseen)",
               mode);
         size_t dup = 0;
         for (u64 g = 0; g < 500; g++)
             for (u64 gen = 0; gen < 16; gen++) {
                 Line l{};
-                evo_make(g, gen, seed, mode, l);
+                evo_make(g, gen, seed, rngs[mode], l);
                 dup += !seen.insert(l.w[0]).second;
             }
         CHECK(!dup, "rng %d: %zu (line, generation) pairs produced the same first qword", mode, dup);
@@ -268,8 +271,8 @@ static void test_suite_parses() {
         CHECK(algos().count(algo) == 1, "test '%s': unknown algo '%s'", t.name.c_str(), algo.c_str());
         if (algo == "fill" || algo == "march" || algo == "rwstorm" || algo == "evolve" || algo == "copy" ||
             algo == "chase")
-            CHECK(!build_vars(t.p, 0, 0, test_log).empty(), "test '%s': no data variants (typo in data/style/pattern?)",
-                  t.name.c_str());
+            CHECK(!build_vars(t.p, 0, Rng::Default, test_log).empty(),
+                  "test '%s': no data variants (typo in data/style/pattern?)", t.name.c_str());
         if (algo == "march")
             CHECK(!parse_march_variants(t.p.str("march"), test_log).empty(), "test '%s': march parses to nothing",
                   t.name.c_str());

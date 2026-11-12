@@ -219,9 +219,9 @@ void start_run() {
     A.setting = false;
     SetWindowTextW(A.hThr, std::to_wstring(s.threads).c_str());
     s.stopOnError = SendMessageW(A.hStopErr, BM_GETCHECK, 0, 0) == BST_CHECKED;
-    s.cacheMode = std::max(0, (int)SendMessageW(A.hCache, CB_GETCURSEL, 0, 0));
-    s.rngMode = std::max(0, (int)SendMessageW(A.hRng, CB_GETCURSEL, 0, 0));
-    s.suite = std::max(0, (int)SendMessageW(A.hSet, CB_GETCURSEL, 0, 0));
+    s.cacheMode = (CacheMode)std::max(0, (int)SendMessageW(A.hCache, CB_GETCURSEL, 0, 0)); // list order = enum order
+    s.rngMode = (Rng)std::max(0, (int)SendMessageW(A.hRng, CB_GETCURSEL, 0, 0));
+    s.suite = (SuiteSet)std::max(0, (int)SendMessageW(A.hSet, CB_GETCURSEL, 0, 0));
     s.stressFpu = SendMessageW(A.hFpu, BM_GETCHECK, 0, 0) == BST_CHECKED;
     s.largePages = true;
     s.loops = 0; // runs until stopped
@@ -249,7 +249,7 @@ void start_run() {
                     "---- DDR5 RAM Test run %04d-%02d-%02d %02d:%02d:%02d  %llu MB, %d threads, cache=%d rng=%d set=%d "
                     "fpu=%d stop-on-error=%d ----\n",
                     st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond, (unsigned long long)s.megabytes,
-                    s.threads, s.cacheMode, s.rngMode, s.suite, (int)s.stressFpu, (int)s.stopOnError);
+                    s.threads, (int)s.cacheMode, (int)s.rngMode, (int)s.suite, (int)s.stressFpu, (int)s.stopOnError);
         }
     }
     A.logger.sink = [](const std::string& t) {

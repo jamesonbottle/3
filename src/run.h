@@ -16,11 +16,15 @@
 #include "order.h"
 #include "params.h"
 #include "platform.h"
+#include "seed.h"
 #include "types.h"
 
 namespace ddr5 {
 
 // ------------------------------------------------------------------ run context
+// Windows (window_mb) are rounded down to a multiple of this many LINES (256 KiB), with this as the minimum. Not a page
+// size.
+constexpr u64 kWindowGranuleLines = 4096;
 struct Chunk {
     u8* base;
     u64 lines;
@@ -33,11 +37,11 @@ struct View {
 };
 // A shared counter alone on its cache line: during an error storm the threads bump the lane/beat/address-bit counters
 // they hit, and counters that merely sit next to each other must not bounce a line between the cores.
-struct alignas(64) Counter : std::atomic<u64> {
+struct alignas(kLineBytes) Counter : std::atomic<u64> {
     Counter() : std::atomic<u64>(0) {}
     using std::atomic<u64>::operator=;
 };
-static_assert(sizeof(Counter) == 64, "one counter per cache line");
+static_assert(sizeof(Counter) == kLineBytes, "one counter per cache line");
 
 struct Stats {
     std::atomic<u64> lines{0}, bits{0}, blk[4], trans{0}, stable{0}, unstable{0};
@@ -127,7 +131,7 @@ struct Run {
     Run& operator=(const Run&) = delete;
     u64 salt = 0; // from the run seed and the loop number (run_suite sets it per loop): every random choice is a
                   // function of it
-    int rng = 0;  // hash mixer chosen in Settings (0 splitmix64, 1 murmur3 fmix64, 2 xorshift64*); see mix64()
+    Rng rng = Rng::Default; // hash mixer chosen in Settings; see mix64()
     Layout layout;
     std::string testName;              // the running test; also the key into winctr
     std::map<std::string, u64> winctr; // per test name: how many windows earlier loops have used (rotates the windows)
@@ -137,7 +141,7 @@ struct Run {
     // call once per verified 64B line; flushes to the shared counters every 64K lines per thread, and once more when
     // the thread ends (parallel() calls vflush), so the lines counted since the last 64K boundary are not lost
     void vtick() {
-        if (++t_vcount >= 0x10000)
+        if (++t_vcount >= kTickLines)
             vflush();
     }
     void sync() { bar->arrive_and_wait(); }
@@ -145,7 +149,7 @@ struct Run {
         std::lock_guard<std::mutex> l(errors.mu);
         label = s;
     }
-    void tick() { progress.done.fetch_add(0x10000ull * 64, std::memory_order_relaxed); }
+    void tick() { progress.done.fetch_add(kTickLines * kLineBytes, std::memory_order_relaxed); }
     void add_done(u64 bytes) { progress.done.fetch_add(bytes, std::memory_order_relaxed); } // bytes moved, for GB/s
     // Window `ctr` of the thread's chunk. ceil(lines / wl) windows rotate; the last one is shifted back so it ends
     // exactly at the chunk end (it overlaps the previous window instead of leaving a never-tested tail).
@@ -156,25 +160,25 @@ struct Run {
         u64 nw = (c.lines + wl - 1) / wl, s = (ctr % nw) * wl;
         if (s + wl > c.lines)
             s = c.lines - wl;
-        return {c.base + s * 64, c.g + s, wl};
+        return {c.base + s * kLineBytes, c.g + s, wl};
     }
     // A window of the same size that never overlaps view(tid, wl, ctr): where the disturb traffic goes. Needs >= 2
     // whole windows per chunk.
     View dview(int tid, u64 wl, u64 ctr) const {
         const Chunk& c = layout.chunks[tid];
         View v = view(tid, wl, ctr);
-        u64 sv = (u64)(v.base - c.base) / 64, sd = sv + wl;
+        u64 sv = (u64)(v.base - c.base) / kLineBytes, sd = sv + wl;
         if (sd + wl > c.lines)
             sd = sv >= wl ? sv - wl : sv + wl;
-        return {c.base + sd * 64, c.g + sd, wl};
+        return {c.base + sd * kLineBytes, c.g + sd, wl};
     }
     u64 window_lines(const Params& P) const {
         u64 mb = P.num("window_mb", 0);
         if (!mb)
             return 0;
-        u64 wl = (mb << 20) / 64 / layout.T;
-        wl = wl / 4096 * 4096;
-        return std::max<u64>(wl, 4096);
+        u64 wl = (mb << 20) / kLineBytes / layout.T;
+        wl = wl / kWindowGranuleLines * kWindowGranuleLines;
+        return std::max<u64>(wl, kWindowGranuleLines);
     }
     void sleep_ms(u64 ms) {
         double end = plat::now() + ms / 1000.0;
@@ -211,8 +215,8 @@ struct Run {
         u64 c = t_vcount;
         t_vcount = 0;
         if (c) {
-            progress.vbytes.fetch_add(c * 64, std::memory_order_relaxed);
-            progress.vtotal.fetch_add(c * 64, std::memory_order_relaxed);
+            progress.vbytes.fetch_add(c * kLineBytes, std::memory_order_relaxed);
+            progress.vtotal.fetch_add(c * kLineBytes, std::memory_order_relaxed);
         }
     }
 
@@ -311,7 +315,7 @@ void Run::parallel(F fn) {
                          (unsigned long long)errors.errTotal.load(), // run total: st is reset for every test
                          (unsigned long long)st.lines.load());
                 if (log.console && log.tty) {
-                    printf("\r%-118.118s", buf);
+                    printf("\r%-*.*s", kStatusWidth, kStatusWidth, buf);
                     fflush(stdout);
                 } else if (log.console && t - hb >= 30.0) {
                     hb = t;

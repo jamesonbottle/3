@@ -58,7 +58,7 @@ void algo_chase(Run& R, const Params& P) {
                     u64 idx = o.at(i), nx = o.at(i + 1 == w.n ? 0 : i + 1);
                     Line l;
                     make(idx, nx, l);
-                    io::store(w.base + idx * 64, l);
+                    io::store(w.base + idx * kLineBytes, l);
                     if (((i + 1) & 0xFFFF) == 0) {
                         R.tick();
                         if (R.stop)
@@ -75,7 +75,7 @@ void algo_chase(Run& R, const Params& P) {
                     for (u64 k = 0; k < K; k++) {
                         if (bad[k])
                             continue;
-                        const u8* a = w.base + p[k] * 64;
+                        const u8* a = w.base + p[k] * kLineBytes;
                         Line act, e;
                         CBAR();
                         IO<32, 0, 0>::load(a, act);
@@ -83,7 +83,7 @@ void algo_chase(Run& R, const Params& P) {
                         CBAR();
                         make(p[k], act.w[0], e);
                         R.vtick();
-                        if (memcmp(&act, &e, 64) != 0 || act.w[0] >= w.n) {
+                        if (memcmp(&act, &e, kLineBytes) != 0 || act.w[0] >= w.n) {
                             R.report(tid, a, e, act, "chase");
                             bad[k] = 1;
                             continue;
@@ -91,7 +91,7 @@ void algo_chase(Run& R, const Params& P) {
                         p[k] = act.w[0];
                     }
                     if (((st + 1) & 0xFFFF) == 0) {
-                        R.add_done(0x10000ull * 64 * K);
+                        R.add_done(kTickLines * kLineBytes * K);
                     }
                 }
                 R.sync();

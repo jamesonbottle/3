@@ -58,7 +58,7 @@ void Run::report(int tid, const u8* addr, const Line& e, const Line& a, const ch
         _mm_mfence();
         Line r;
         IO<32, 0, 0>::load(addr, r);
-        bool eq_e = !memcmp(&r, &e, 64), eq_a = !memcmp(&r, &a, 64);
+        bool eq_e = !memcmp(&r, &e, kLineBytes), eq_a = !memcmp(&r, &a, kLineBytes);
         if (eq_e) {
             st.trans++;
             cls = "TRANSIENT(re-read ok: read path/signalling)";

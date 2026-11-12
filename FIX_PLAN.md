@@ -29,7 +29,7 @@ Dependencies: S9 (split `run_suite`) comes after S1 (RAII) and S8 (enums). Both 
 | S5  | Input value validation        | Reliability | Medium   | DONE   |
 | S6  | `status()` race + Ctrl-C      | Reliability | Medium   | DONE   |
 | S7  | Platform robustness           | Reliability | Medium   | DONE   |
-| S8  | Enums and named constants     | Readability | Low      | TODO   |
+| S8  | Enums and named constants     | Readability | Low      | DONE   |
 | S9  | Split `run_suite`             | Readability | Low      | TODO   |
 | S10 | Remove duplication            | Readability | Low      | TODO   |
 | S11 | Stale docs and comments       | Readability | Low      | TODO   |
@@ -49,6 +49,7 @@ Dependencies: S9 (split `run_suite`) comes after S1 (RAII) and S8 (enums). Both 
 | 2026-11-12 | S1      | DONE: `ScopeExit` guards in `run_suite`, exception-safe `Run::parallel` (rethrow after join, barrier slots dropped, `aborted` flag), `catch (...)`; unit tests + inject selftest for exit code 3 |
 | 2026-11-12 | S4      | DONE: `appendf` (log.h) grows a `std::string` instead of clamping a fixed buffer, used by `report()` and `Logger::emitf`; first-error times and `errors.logged` atomic, `report()` returns before `errors.mu` once `maxLog` blocks are written; `Counter` (one cache line each) for `lane`/`beat`/`abit`; `test_report` in `tools/unit_tests.cpp` |
 | 2026-11-12 | S7      | DONE on Linux, Windows part unbuilt: `ncpu()`/`pin()` follow `sched_getaffinity` (taskset), `pin()` returns bool and `Run::parallel` warns once, `avail_phys()` from `MemAvailable` with 0 = unknown handled in `run_suite`, `plat::alloc` returns a `note` (why memory is not locked), Windows API results checked; selftest group 2e |
+| 2026-11-12 | S8      | DONE on Linux, GUI edits unbuilt: `Rng`/`CacheMode`/`SuiteSet` enums, `kLineBytes`/`kPageBytes`/`kLinesPerPage`/`kTickLines`/`kStatusWidth`/`kWindowGranuleLines`; fixed-seed error output identical to the pre-change build for all four `--rng` values; `format.sh --check` and `selftest.sh` pass |
 
 ---
 
@@ -231,7 +232,7 @@ Cause: in `src/algo_evolve.cpp` the verify walk runs right after the rewrite pas
 
 ## S8. Replace magic integers with enums and named constants
 
-**Status:** TODO (before S9)
+**Status:** DONE on Linux (2026-11-12); the GUI edits (`main_gui.cpp`) are written but NOT compiled (no Windows toolchain in the session). One enum, no mapping: `Rng { Default, SplitMix, Murmur, XorShift }` in `seed.h` is used by `Settings::rngMode`, `Run::rng`, `Gen::rng`, `build_vars`, `evo_make` and `mix64` (Default and SplitMix are the same function, so the old `== 2 ? 1 : == 3 ? 2 : 0` mapping is gone and no seed's data changes). `CacheMode` and `SuiteSet` are in `suite.h`; the CLI `choice()` index and the GUI `CB_GETCURSEL` index convert straight to the enums (list order = enum order, commented at both places; the GUI log header still prints the numbers via `(int)`). Constants: `kLineBytes`, `kPageBytes`, `kLinesPerPage`, `kTickLines` in `types.h`, `kStatusWidth` in `log.h`, and `kWindowGranuleLines` (4096 LINES = 256 KiB, the `window_mb` rounding in `Run::window_lines`; it only looks like the page size). The progress line uses `%-*.*s` with `kStatusWidth`. Checked: old (HEAD) and new builds give identical qword-level error output for the injected "Evolving data" test with `--seed 7` under all four `--rng` values (and murmur differs from xorshift, so the check is sensitive to the mixer); unit tests and `selftest.sh` pass. Left as literals on purpose: `inject.cpp` (test hooks with hand-picked offsets), `main_gui.cpp` widget sizes, the `1..64` lines-per-round cap and thread cap in `algo_coherency.cpp`, bit widths in `gen.cpp`, and `64 * 1024` (KiB) in `algo_copy.cpp`.
 
 **Problem.** `Settings` uses `cacheMode` 0..3, `rngMode` 0..3 and `suite` 0/1 compared by number. `R.rng = s.rngMode == 2 ? 1 : s.rngMode == 3 ? 2 : 0` is an off-by-one mapping between two integer schemes (default and SplitMix both map to 0). Literals 64 (line size), 4096 (page), `0x10000` (tick interval) and 118 (progress width) appear throughout.
 

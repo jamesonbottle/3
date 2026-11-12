@@ -34,7 +34,7 @@ struct Gen {
     int rep = 0;
     Line pat{}, inv{};
     u64 seed = 0;
-    int rng = 0; // mixer of the hash data (kind 1): 0 splitmix64, 1 murmur3 fmix64, 2 xorshift64*
+    Rng rng = Rng::Default; // mixer of the hash data (kind 1)
     int altshift = -1;
     u64 modn = 0, modoff = 0; // modulo-N: every Nth line (offset) is inverted
     void set_beats(const Beats& b) {
@@ -74,6 +74,6 @@ struct Var {
     Gen g;
 };
 
-std::vector<Var> build_vars(const Params& P, u64 salt, int rng, const Logger& log); // salt, rng: Run::salt, Run::rng
+std::vector<Var> build_vars(const Params& P, u64 salt, Rng rng, const Logger& log); // salt, rng: Run::salt, Run::rng
 
 } // namespace ddr5

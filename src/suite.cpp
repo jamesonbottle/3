@@ -98,14 +98,14 @@ int run_suite(const Settings& s, Run& R) {
         cfg.stopOnErr = s.stopOnError;
         cfg.logFile = s.logFile;
         cfg.loops = s.loops;
-        R.rng = s.rngMode == 2 ? 1 : s.rngMode == 3 ? 2 : 0;
+        R.rng = s.rngMode;
         const u64 runSeed = s.seedSet ? s.seed : fresh_seed();
         std::vector<TestDef> sel;
         std::string flt = lower(s.filter);
         for (auto& t : tests) {
             if (t.p.has("enabled") && !t.p.flag("enabled", true))
                 continue;
-            if (s.suite == 1 && !t.p.flag("quick", false))
+            if (s.suite == SuiteSet::Quick && !t.p.flag("quick", false))
                 continue;
             if (!flt.empty() && lower(t.name).find(flt) == std::string::npos)
                 continue;
@@ -114,9 +114,9 @@ int run_suite(const Settings& s, Run& R) {
                 continue;
             if (s.testSeconds && t.p.has("seconds"))
                 t.p.m["seconds"] = std::to_string(std::min<u64>(t.p.num("seconds", s.testSeconds), s.testSeconds));
-            if (s.cacheMode && (algo == "fill" || algo == "march" || algo == "rwstorm")) {
-                t.p.m["flush"] = s.cacheMode == 1 ? "1" : "0";
-                t.p.m["nt"] = s.cacheMode == 3 ? "1" : "0";
+            if (s.cacheMode != CacheMode::Default && (algo == "fill" || algo == "march" || algo == "rwstorm")) {
+                t.p.m["flush"] = s.cacheMode == CacheMode::Bypass ? "1" : "0";
+                t.p.m["nt"] = s.cacheMode == CacheMode::NonTemporal ? "1" : "0";
             }
             t.p.test = t.name; // so a message from the algo's option parsing says which test it is about
             sel.push_back(t);
@@ -203,7 +203,7 @@ int run_suite(const Settings& s, Run& R) {
             R.log.emitf("note: %s\n", allocNote.c_str());
         R.layout.chunks.clear();
         for (int t = 0; t < R.layout.T; t++)
-            R.layout.chunks.push_back({R.layout.region + (u64)t * per, per / 64, (u64)t * (per / 64)});
+            R.layout.chunks.push_back({R.layout.region + (u64)t * per, per / kLineBytes, (u64)t * (per / kLineBytes)});
         R.parallel([&](int tid) { std::memset(R.layout.chunks[tid].base, 0, per); });
         if (R.errors.logf)
             fprintf(R.errors.logf, "---- ddr5test run, %.2f GiB, %d threads, seed 0x%016llX ----\n",

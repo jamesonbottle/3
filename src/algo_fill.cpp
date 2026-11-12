@@ -72,7 +72,7 @@ void algo_fill(Run& R, const Params& P) {
                 for (u64 dw : o.dwell_ms)
                     for (int dm : dmodes)
                         jobs.push_back({v.label + (inv ? " [inverted]" : "") +
-                                            (o.strided ? " stride=" + std::to_string(s * 64) + "B" : "") +
+                                            (o.strided ? " stride=" + std::to_string(s * kLineBytes) + "B" : "") +
                                             (o.dwell_ms.size() > 1 ? " dwell=" + std::to_string(dw) + "ms" : "") +
                                             (dmodes.size() > 1 ? std::string(" disturb=") + dn[dm] : ""),
                                         &v.g, (bool)inv, s, dw, dm});
@@ -92,7 +92,7 @@ void algo_fill(Run& R, const Params& P) {
             dispatch(o.width, o.nt, o.flush, [&](auto Wc, auto NTc, auto FLc) {
                 using io = IO<decltype(Wc)::value, decltype(NTc)::value, decltype(FLc)::value>;
                 walk(R, ow, wo.rev, [&](u64 i) {
-                    u8* a = w.base + i * 64;
+                    u8* a = w.base + i * kLineBytes;
                     Line l;
                     j.g->make(w.g + i, a, j.inv, l);
                     io::store(a, l);
@@ -114,7 +114,7 @@ void algo_fill(Run& R, const Params& P) {
                 }
                 for (u64 r = 0; r < o.reads && !R.stop; r++)
                     walk(R, ov, vo.rev, [&](u64 i) {
-                        const u8* a = vw.base + i * 64;
+                        const u8* a = vw.base + i * kLineBytes;
                         Line e, act;
                         j.g->make(vw.g + i, a, j.inv, e);
                         R.vtick();

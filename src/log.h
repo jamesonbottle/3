@@ -5,6 +5,8 @@
 
 namespace ddr5 {
 
+constexpr int kStatusWidth = 118; // columns of the live progress line (and of the blanking that erases it)
+
 // printf-style formatting appended to `s`. The text is never truncated and never overruns: the string grows to fit.
 // (A formatting error appends nothing.)
 void appendf(std::string& s, const char* fmt, ...);

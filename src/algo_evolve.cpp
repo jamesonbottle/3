@@ -57,9 +57,9 @@ void algo_evolve(Run& R, const Params& P) {
     std::vector<Job> jobs;
     for (auto& v : vars)
         for (u64 s : opt.strides)
-            jobs.push_back(
-                {"evolve " + v.label + (opt.strides.size() > 1 ? " stride=" + std::to_string(s * 64) + "B" : ""),
-                 v.g.seed, s});
+            jobs.push_back({"evolve " + v.label +
+                                (opt.strides.size() > 1 ? " stride=" + std::to_string(s * kLineBytes) + "B" : ""),
+                            v.g.seed, s});
     u64 base = R.winctr[R.testName];
     R.winctr[R.testName] += jobs.size();
     R.parallel([&](int tid) {
@@ -78,7 +78,7 @@ void algo_evolve(Run& R, const Params& P) {
                 walk(R, ow, wo.rev, [&](u64 i) {
                     Line l;
                     evo_make(w.g + i, 0, j.seed, R.rng, l);
-                    io::store(w.base + i * 64, l);
+                    io::store(w.base + i * kLineBytes, l);
                 }); // generation 0 everywhere
                 _mm_sfence();
                 R.sync();
@@ -90,7 +90,7 @@ void algo_evolve(Run& R, const Params& P) {
                             return; // not this line's turn: it must keep its old data
                         Line l;
                         evo_make(g, p / per, j.seed, R.rng, l);
-                        io::store(w.base + i * 64, l);
+                        io::store(w.base + i * kLineBytes, l);
                     });
                     _mm_sfence();
                     R.sync();
@@ -99,7 +99,7 @@ void algo_evolve(Run& R, const Params& P) {
                         break; // the rewrite walk above may have been cut short: lines it never reached still hold the
                                // previous generation and must not be verified against this one
                     walk(R, ov, vo.rev, [&](u64 i) {
-                        const u8* a = vw.base + i * 64;
+                        const u8* a = vw.base + i * kLineBytes;
                         u64 g = vw.g + i;
                         Line e, act;
                         evo_make(g, p / evo_period(g, j.seed, opt.period), j.seed, R.rng, e);

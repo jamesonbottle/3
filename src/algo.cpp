@@ -19,7 +19,7 @@ std::vector<u64> stride_list(const Params& P, bool needed) {
         return o;
     }
     for (u64 b : P.nums("stride", "4K")) {
-        o.push_back(std::max<u64>(1, b / 64));
+        o.push_back(std::max<u64>(1, b / kLineBytes));
     }
     return o;
 }
@@ -35,7 +35,7 @@ void disturb_traffic(Run& R, const View& d, int mode, u64 passes, u64 seed) {
     o.init(Order::RANDOM, d.n, 1, seed, R.salt);
     for (u64 p = 0; p < passes && !R.stop; p++)
         walk(R, o, false, [&](u64 i) {
-            u8* a = d.base + i * 64;
+            u8* a = d.base + i * kLineBytes;
             if (mode != 1) {
                 Line t;
                 IO<32, 0, 0>::load(a, t);
@@ -166,7 +166,7 @@ std::vector<std::string> bad_values(const TestDef& t) {
         CoherencyOpts::from(P);
     const Keys& mine = algo_keys(algo);
     if (mine.count("data"))
-        build_vars(P, 0, 0, cap);
+        build_vars(P, 0, Rng::Default, cap);
     if (mine.count("stride"))
         stride_list(P, true); // from() reads it only when an order needs it; a bad value is wrong either way
     if (mine.count("window_mb"))

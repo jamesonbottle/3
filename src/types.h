@@ -16,10 +16,15 @@ using u16 = uint16_t;
 using u32 = uint32_t;
 using u64 = uint64_t;
 
-struct alignas(64) Line {
+constexpr u64 kLineBytes = 64;                                // one DDR5 burst = one cache line = one tested "line"
+constexpr u64 kPageBytes = 4096;                              // the page the pagemix test shuffles and copies
+constexpr int kLinesPerPage = (int)(kPageBytes / kLineBytes); // 64
+constexpr u64 kTickLines = 0x10000;                           // lines a thread verifies between two progress updates
+
+struct alignas(kLineBytes) Line {
     u64 w[8];
 };
-static_assert(sizeof(Line) == 64, "Line must be one 64B burst (BL16 x 32-bit DDR5 subchannel)");
+static_assert(sizeof(Line) == kLineBytes, "Line must be one 64B burst (BL16 x 32-bit DDR5 subchannel)");
 
 inline u64 splitmix(u64 x) {
     x += 0x9E3779B97F4A7C15ull;

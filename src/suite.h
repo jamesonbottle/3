@@ -4,19 +4,33 @@
 #include <vector>
 #include "params.h"
 #include "run.h"
+#include "seed.h"
 #include "types.h"
 
 namespace ddr5 {
+
+// The enumerators are in the order of the CLI --cache / GUI "CPU cache" and "Test set" lists (the front-ends convert
+// a list index straight to the enum).
+enum class CacheMode : int {
+    Default,     // per test
+    Bypass,      // clflush every access
+    Cached,      // plain cached stores
+    NonTemporal, // non-temporal stores
+};
+enum class SuiteSet : int {
+    Full,
+    Quick, // no long pauses / hammer
+};
 
 struct Settings {
     u64 megabytes = 0;       // 0 = auto (90% of free memory)
     int threads = 0;         // 0 = all logical CPUs
     bool stopOnError = true; // beeping is done by the front-end
-    int cacheMode = 0;       // 0 default (per test), 1 bypass (clflush every access), 2 cached, 3 non-temporal stores
-    int rngMode = 0;         // 0 default, 1 SplitMix64, 2 Murmur3 fmix64, 3 xorshift64*
-    bool stressFpu = false;  // extra FPU/AVX load threads (more current draw while testing memory)
+    CacheMode cacheMode = CacheMode::Default;
+    Rng rngMode = Rng::Default; // hash mixer for 'hash' data; Default = SplitMix
+    bool stressFpu = false;     // extra FPU/AVX load threads (more current draw while testing memory)
     bool largePages = true;
-    int suite = 0; // 0 full, 1 quick (no long pauses / hammer)
+    SuiteSet suite = SuiteSet::Full;
     std::string logFile = "ddr5test.log";
     bool logFileSet =
         false; // true = the user named the file (--log): failing to open it is then an error, not a warning

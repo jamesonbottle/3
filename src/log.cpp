@@ -47,7 +47,7 @@ void Logger::emitf(const char* fmt, ...) const {
 }
 void Logger::print_clear() const {
     if (console && tty)
-        printf("\r%*s\r", 118, "");
+        printf("\r%*s\r", kStatusWidth, "");
 }
 
 } // namespace ddr5

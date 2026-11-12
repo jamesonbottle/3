@@ -29,37 +29,37 @@ struct PagePat {
 template <int FL>
 static void pm_fill(u8* p, const Gen& g, bool inv) {
     using io = IO<32, 0, FL>;
-    for (int l = 0; l < 64; l++) {
+    for (int l = 0; l < kLinesPerPage; l++) {
         Line e;
-        g.make(l, p + l * 64, inv, e);
-        io::store(p + l * 64, e);
+        g.make(l, p + l * kLineBytes, inv, e);
+        io::store(p + l * kLineBytes, e);
     }
 }
 template <int FL>
 static void pm_check(Run& R, int tid, u8* p, const Gen& g, bool inv, const char* ph) {
     using io = IO<32, 0, FL>;
-    for (int l = 0; l < 64; l++) {
+    for (int l = 0; l < kLinesPerPage; l++) {
         Line e, a;
-        g.make(l, p + l * 64, inv, e);
+        g.make(l, p + l * kLineBytes, inv, e);
         R.vtick();
-        if (!io::verify(p + l * 64, e, a)) {
-            R.report(tid, p + l * 64, e, a, ph);
-            io::store(p + l * 64, e);
+        if (!io::verify(p + l * kLineBytes, e, a)) {
+            R.report(tid, p + l * kLineBytes, e, a, ph);
+            io::store(p + l * kLineBytes, e);
         }
     }
 }
 template <int FL>
 static void pm_copy(Run& R, int tid, u8* s, u8* d, const Gen& g, bool inv) {
     using io = IO<32, 0, FL>;
-    for (int l = 0; l < 64; l++) {
+    for (int l = 0; l < kLinesPerPage; l++) {
         Line e, a;
-        g.make(l, s + l * 64, inv, e);
+        g.make(l, s + l * kLineBytes, inv, e);
         R.vtick();
-        if (!io::verify(s + l * 64, e, a)) {
-            R.report(tid, s + l * 64, e, a, "pagemix-src");
-            io::store(s + l * 64, e);
+        if (!io::verify(s + l * kLineBytes, e, a)) {
+            R.report(tid, s + l * kLineBytes, e, a, "pagemix-src");
+            io::store(s + l * kLineBytes, e);
         }
-        io::store(d + l * 64,
+        io::store(d + l * kLineBytes,
                   e); // what was read equals e when the check passes; after a failure the destination gets good data
     }
 }
@@ -68,8 +68,8 @@ static void pm_invert(u8* p) {
     static const int dir[4] = {0, 1, 1, 0}; // up, down, down, up
     const __m256i ones = _mm256_set1_epi32(-1);
     for (int pass = 0; pass < 4; pass++)
-        for (int k = 0; k < 64; k++) {
-            u8* a = p + (dir[pass] ? 63 - k : k) * 64;
+        for (int k = 0; k < kLinesPerPage; k++) {
+            u8* a = p + (dir[pass] ? kLinesPerPage - 1 - k : k) * kLineBytes;
             CBAR();
             __m256i x = _mm256_xor_si256(_mm256_load_si256((const __m256i*)a), ones),
                     y = _mm256_xor_si256(_mm256_load_si256((const __m256i*)a + 1), ones);
@@ -92,7 +92,7 @@ PagemixOpts PagemixOpts::from(const Params& P) {
 void algo_pagemix(Run& R, const Params& P) {
     const PagemixOpts opt = PagemixOpts::from(P);
     const auto& tab = sat_table();
-    u64 np = R.layout.regionBytes / 4096;
+    u64 np = R.layout.regionBytes / kPageBytes;
     if (np < (u64)R.layout.T * 8) {
         R.log.emitf("    pagemix: region too small, skipped\n");
         return;
@@ -140,7 +140,7 @@ void algo_pagemix(Run& R, const Params& P) {
             R.set_label("page shuffle: fill");
         for (u64 pg = tid; pg < np && !R.stop; pg += R.layout.T) {
             pp[pg] = pick(nx());
-            u8* a = R.layout.region + pg * 4096;
+            u8* a = R.layout.region + pg * kPageBytes;
             Gen g = gen(pp[pg]);
             pm_fill<1>(a, g, pp[pg].inv);
             filled[pg] = 1;
@@ -170,8 +170,8 @@ void algo_pagemix(Run& R, const Params& P) {
                 busy[s].store(0, std::memory_order_release);
                 continue;
             }
-            u8* sa = R.layout.region + s * 4096;
-            u8* da = R.layout.region + d * 4096;
+            u8* sa = R.layout.region + s * kPageBytes;
+            u8* da = R.layout.region + d * kPageBytes;
             PagePat sq = pp[s];
             Gen sg = gen(sq);
             if (op <= 5) {
@@ -189,19 +189,19 @@ void algo_pagemix(Run& R, const Params& P) {
                 else
                     pm_fill<0>(sa, ng, nq.inv);
                 pp[s] = nq;
-                R.add_done(4096);
+                R.add_done(kPageBytes);
             } else if (op <= 8) {
                 if (fl)
                     pm_invert<1>(sa);
                 else
                     pm_invert<0>(sa);
-                R.add_done(4096 * 4);
+                R.add_done(kPageBytes * 4);
             } else {
                 if (fl)
                     pm_check<1>(R, tid, sa, sg, sq.inv, "pagemix-check");
                 else
                     pm_check<0>(R, tid, sa, sg, sq.inv, "pagemix-check");
-                R.add_done(4096);
+                R.add_done(kPageBytes);
             }
             if (two)
                 busy[d].store(0, std::memory_order_release);
@@ -216,7 +216,7 @@ void algo_pagemix(Run& R, const Params& P) {
             if (!filled[pg])
                 continue;
             Gen g = gen(pp[pg]);
-            pm_check<1>(R, tid, R.layout.region + pg * 4096, g, pp[pg].inv, "pagemix-final");
+            pm_check<1>(R, tid, R.layout.region + pg * kPageBytes, g, pp[pg].inv, "pagemix-final");
             if (((pg / R.layout.T + 1) & 0x3FF) == 0)
                 R.tick();
         }

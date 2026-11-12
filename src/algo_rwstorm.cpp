@@ -68,14 +68,14 @@ void algo_rwstorm(Run& R, const Params& P) {
             dispatch(opt.width, opt.nt, opt.flush, [&](auto Wc, auto NTc, auto FLc) {
                 using io = IO<decltype(Wc)::value, decltype(NTc)::value, decltype(FLc)::value>;
                 auto wr = [&](u64 i) {
-                    u8* a = w.base + i * 64;
+                    u8* a = w.base + i * kLineBytes;
                     Line l;
                     j.g->make(w.g + i, a, false, l);
                     io::store(a, l);
                 };
                 auto rd = [&](const View& v) {
                     return [&, v](u64 i) {
-                        const u8* a = v.base + i * 64;
+                        const u8* a = v.base + i * kLineBytes;
                         Line e, act;
                         j.g->make(v.g + i, a, false, e);
                         R.vtick();

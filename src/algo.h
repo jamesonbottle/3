@@ -83,7 +83,7 @@ std::vector<MVar> parse_march_variants(const std::string& str, const Logger& log
 inline u64 evo_period(u64 g, u64 seed, u64 maxp) {
     return 1 + splitmix(g ^ seed) % maxp;
 }
-inline void evo_make(u64 g, u64 gen, u64 seed, int rng, Line& o) { // rng: Run::rng
+inline void evo_make(u64 g, u64 gen, u64 seed, Rng rng, Line& o) { // rng: Run::rng
     u64 k = splitmix(seed ^ (gen * 0xD6E8FEB86659FD93ull));
     for (int j = 0; j < 8; j++)
         o.w[j] = mix64(k + (g << 3) + j, rng); // follows the selected RNG (Advanced > RNG / --rng)

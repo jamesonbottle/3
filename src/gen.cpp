@@ -252,7 +252,7 @@ static std::vector<Var> build_vars_impl(const Params& P, u64 salt, const Logger&
     return out;
 }
 
-std::vector<Var> build_vars(const Params& P, u64 salt, int rng, const Logger& log) {
+std::vector<Var> build_vars(const Params& P, u64 salt, Rng rng, const Logger& log) {
     std::vector<Var> out = build_vars_impl(P, salt, log);
     for (auto& v : out)
         v.g.rng = rng;
