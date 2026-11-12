@@ -77,7 +77,7 @@ int run_suite(const Settings& s, Run& R) {
             for (const std::string& k : unknown_keys(t)) {
                 if (t.own.count(k))
                     R.log.emitf("test '%s': key '%s' is not used by algo '%s' (ignored)\n", t.name.c_str(), k.c_str(),
-                                lower(t.p.str("algo", "fill")).c_str());
+                                t.algo().c_str());
                 else
                     R.log.emitf("test '%s': key '%s' (inherited default) is not used by any algo (ignored)\n",
                                 t.name.c_str(), k.c_str());
@@ -109,7 +109,7 @@ int run_suite(const Settings& s, Run& R) {
                 continue;
             if (!flt.empty() && lower(t.name).find(flt) == std::string::npos)
                 continue;
-            std::string algo = lower(t.p.str("algo", "fill"));
+            const std::string algo = t.algo();
             if (!algos().count(algo))
                 continue;
             if (s.testSeconds && t.p.has("seconds"))
@@ -239,7 +239,7 @@ int run_suite(const Settings& s, Run& R) {
                 R.set_label(t.name);
                 R.log.emitf("[loop %llu  %zu/%zu] %s\n", (unsigned long long)loop, ti + 1, sel.size(), t.name.c_str());
                 double ts = plat::now();
-                algos().at(lower(t.p.str("algo", "fill")))(R, t.p);
+                algos().at(t.algo())(R, t.p);
                 double el = plat::now() - ts;
                 u64 bad = R.st.lines.load();
                 R.log.emitf("    %s  %.1fs  %.1f GB/s avg   coverage this test %.1fx\n",

@@ -71,6 +71,14 @@ struct IO {
 };
 template <int V>
 using IC = std::integral_constant<int, V>;
+// Turns a run-time flag into a compile-time one: calls f(IC<1>{}) when `fl` is set, f(IC<0>{}) otherwise.
+template <class F>
+inline void with_flush(bool fl, F&& f) {
+    if (fl)
+        f(IC<1>{});
+    else
+        f(IC<0>{});
+}
 template <class F>
 inline void dispatch(int width, bool nt, bool fl, F&& f) {
     auto d3 = [&](auto w) {

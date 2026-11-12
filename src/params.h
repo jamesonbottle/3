@@ -25,19 +25,33 @@ struct Params {
     // They are recorded, not thrown: the accessor still returns a harmless default (0 / false) so a run is never
     // changed by them; run_suite validates every selected test up front (bad_values() in algo.h) and refuses to start.
     mutable std::vector<std::string> bad;
+    // Test hook: when set, every key looked up through has/str/num/flag (so also words/nums) is added to it. Lets a
+    // unit test learn which keys a helper reads, without a second list to keep in step. Not thread-safe; null in real
+    // runs.
+    mutable std::set<std::string>* reads = nullptr;
+    void touch(const std::string& k) const {
+        if (reads)
+            reads->insert(k);
+    }
     std::string where() const { return test.empty() ? "" : "test '" + test + "': "; }
     void note_bad(const std::string& what) const;                    // thread-safe append to `bad`
     u64 parse_num(const std::string& k, const std::string& v) const; // pnum_checked(v), recording a failure under key k
-    bool has(const std::string& k) const { return m.count(k) > 0; }
+    bool has(const std::string& k) const {
+        touch(k);
+        return m.count(k) > 0;
+    }
     std::string str(const std::string& k, const std::string& d = "") const {
+        touch(k);
         auto i = m.find(k);
         return i == m.end() ? d : i->second;
     }
     u64 num(const std::string& k, u64 d) const {
+        touch(k);
         auto i = m.find(k);
         return i == m.end() ? d : parse_num(k, i->second);
     }
     bool flag(const std::string& k, bool d) const {
+        touch(k);
         auto i = m.find(k);
         if (i == m.end())
             return d;
@@ -62,6 +76,8 @@ struct TestDef {
     std::string name;
     Params p;                  // the [default] values, overridden by the keys of the [test] block
     std::set<std::string> own; // keys the [test] block itself set (the rest of `p` was inherited from [default])
+    // Name of the test algorithm (the `algo` key, lower-cased; "fill" when absent). The one place that decides this.
+    std::string algo() const { return lower(p.str("algo", "fill")); }
 };
 struct Cfg {
     u64 loops = 1, maxLog = 200;

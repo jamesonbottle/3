@@ -31,7 +31,7 @@ Dependencies: S9 (split `run_suite`) comes after S1 (RAII) and S8 (enums). Both 
 | S7  | Platform robustness           | Reliability | Medium   | DONE   |
 | S8  | Enums and named constants     | Readability | Low      | DONE   |
 | S9  | Split `run_suite`             | Readability | Low      | TODO   |
-| S10 | Remove duplication            | Readability | Low      | TODO   |
+| S10 | Remove duplication            | Readability | Low      | DONE   |
 | S11 | Stale docs and comments       | Readability | Low      | TODO   |
 | S12 | CI: sanitizers, warnings      | Tooling     | Low      | TODO   |
 
@@ -50,6 +50,7 @@ Dependencies: S9 (split `run_suite`) comes after S1 (RAII) and S8 (enums). Both 
 | 2026-11-12 | S4      | DONE: `appendf` (log.h) grows a `std::string` instead of clamping a fixed buffer, used by `report()` and `Logger::emitf`; first-error times and `errors.logged` atomic, `report()` returns before `errors.mu` once `maxLog` blocks are written; `Counter` (one cache line each) for `lane`/`beat`/`abit`; `test_report` in `tools/unit_tests.cpp` |
 | 2026-11-12 | S7      | DONE on Linux, Windows part unbuilt: `ncpu()`/`pin()` follow `sched_getaffinity` (taskset), `pin()` returns bool and `Run::parallel` warns once, `avail_phys()` from `MemAvailable` with 0 = unknown handled in `run_suite`, `plat::alloc` returns a `note` (why memory is not locked), Windows API results checked; selftest group 2e |
 | 2026-11-12 | S8      | DONE on Linux, GUI edits unbuilt: `Rng`/`CacheMode`/`SuiteSet` enums, `kLineBytes`/`kPageBytes`/`kLinesPerPage`/`kTickLines`/`kStatusWidth`/`kWindowGranuleLines`; fixed-seed error output identical to the pre-change build for all four `--rng` values; `format.sh --check` and `selftest.sh` pass |
+| 2026-11-12 | S10     | DONE: `TestDef::algo()`, `with_flush` (pagemix), `Params::reads` recorder + `test_shared_key_sets` (planted missing key is caught); no behavior change, `format.sh --check` and `selftest.sh` pass |
 
 ---
 
@@ -270,7 +271,7 @@ Cause: in `src/algo_evolve.cpp` the verify walk runs right after the rewrite pas
 
 ## S10. Remove duplication
 
-**Status:** TODO
+**Status:** DONE (2026-11-12). `TestDef::algo()` (`params.h`) is the one place that lower-cases the `algo` key (default "fill"); `algo.cpp` (2), `suite.cpp` (3), `main_cli.cpp` (`--list`, which was the un-lowered copy) and `tools/unit_tests.cpp` (2 reads) use it; the two places that *set* the key (`t.p.m["algo"] = ...`) are untouched. `with_flush(bool, F)` sits next to `dispatch()` in `lineio.h` and replaces the four `if (fl) f<1>(...) else f<0>(...)` pairs in `algo_pagemix.cpp` (the final-verify loop calls `pm_check<1>` directly on purpose and stays as is). Step 3 deviation: instead of a hand-written list of which keys each helper reads (a second table), `Params` got an optional `reads` recorder (null in real runs, `touch()` in `has/str/num/flag`, so also `words/nums`); `test_shared_key_sets` records the keys `build_vars` (all 5 data branches), `stride_list` and `Run::window_lines` really look up and requires every algo that calls a helper to list them in `algo_keys()`. Which algo calls which helper is the one hand-kept part, in the test. Checked by planting a mistake: dropping `modulo` from the data keys in `algo.cpp` gives 6 failures, exit 1. `format.sh --check` and `selftest.sh` pass, fault-injection counts unchanged.
 
 **Problem.** (a) `lower(t.p.str("algo","fill"))` is repeated 4 times in `src` (`algo.cpp` once, `suite.cpp` three times), twice more in `tools/unit_tests.cpp`, and once un-lowered in `main_cli.cpp` (`--list`). (b) `src/algo_pagemix.cpp` repeats `if (fl) f<1>(...) else f<0>(...)` 4 times (copy, fill, invert, check). (c) The hand-synced key sets in `src/algo.cpp` ("must be kept in step by hand").
 

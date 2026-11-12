@@ -166,8 +166,7 @@ int main(int argc, char** argv) {
     if (list) {
         int n = 0;
         for (auto& t : builtin_suite())
-            printf("%3d %s %-9s %s\n", ++n, t.p.flag("quick", false) ? "Q" : " ", t.p.str("algo", "fill").c_str(),
-                   t.name.c_str());
+            printf("%3d %s %-9s %s\n", ++n, t.p.flag("quick", false) ? "Q" : " ", t.algo().c_str(), t.name.c_str());
         return 0;
     }
     log.console = true;

@@ -175,32 +175,21 @@ void algo_pagemix(Run& R, const Params& P) {
             PagePat sq = pp[s];
             Gen sg = gen(sq);
             if (op <= 5) {
-                if (fl)
-                    pm_copy<1>(R, tid, sa, da, sg, sq.inv);
-                else
-                    pm_copy<0>(R, tid, sa, da, sg, sq.inv);
+                with_flush(fl, [&](auto FLc) { pm_copy<decltype(FLc)::value>(R, tid, sa, da, sg, sq.inv); });
                 pp[d] = sq;
                 R.add_done(8192);
             } else if (op == 6) {
                 PagePat nq = pick(nx());
                 Gen ng = gen(nq);
-                if (fl)
-                    pm_fill<1>(sa, ng, nq.inv);
-                else
-                    pm_fill<0>(sa, ng, nq.inv);
+                with_flush(fl, [&](auto FLc) { pm_fill<decltype(FLc)::value>(sa, ng, nq.inv); });
                 pp[s] = nq;
                 R.add_done(kPageBytes);
             } else if (op <= 8) {
-                if (fl)
-                    pm_invert<1>(sa);
-                else
-                    pm_invert<0>(sa);
+                with_flush(fl, [&](auto FLc) { pm_invert<decltype(FLc)::value>(sa); });
                 R.add_done(kPageBytes * 4);
             } else {
-                if (fl)
-                    pm_check<1>(R, tid, sa, sg, sq.inv, "pagemix-check");
-                else
-                    pm_check<0>(R, tid, sa, sg, sq.inv, "pagemix-check");
+                with_flush(fl,
+                           [&](auto FLc) { pm_check<decltype(FLc)::value>(R, tid, sa, sg, sq.inv, "pagemix-check"); });
                 R.add_done(kPageBytes);
             }
             if (two)

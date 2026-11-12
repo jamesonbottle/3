@@ -107,7 +107,7 @@ const Keys& algo_keys(const std::string& algo) {
 // reaches every test, so it only has to be understood by some algo.
 std::vector<std::string> unknown_keys(const TestDef& t) {
     std::vector<std::string> bad;
-    std::string algo = lower(t.p.str("algo", "fill"));
+    const std::string algo = t.algo();
     if (!algos().count(algo))
         return bad; // run_suite skips a test with an unknown algo; the unit tests check the algo names of the built-in
                     // suite
@@ -134,7 +134,7 @@ std::vector<std::string> unknown_keys(const TestDef& t) {
 // read (it calls the algo's own XOpts::from), so there is no second list of which key holds a number to keep in step.
 std::vector<std::string> bad_values(const TestDef& t) {
     std::vector<std::string> out;
-    std::string algo = lower(t.p.str("algo", "fill"));
+    const std::string algo = t.algo();
     if (!algos().count(algo))
         return out;
     Params P = t.p;

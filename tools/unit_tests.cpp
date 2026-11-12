@@ -267,7 +267,7 @@ static void test_suite_parses() {
         quick += t.p.flag("quick", false);
     CHECK(quick == 12, "expected 12 quick tests, got %zu", quick);
     for (auto& t : tests) {
-        std::string algo = lower(t.p.str("algo", "fill"));
+        const std::string algo = t.algo();
         CHECK(algos().count(algo) == 1, "test '%s': unknown algo '%s'", t.name.c_str(), algo.c_str());
         if (algo == "fill" || algo == "march" || algo == "rwstorm" || algo == "evolve" || algo == "copy" ||
             algo == "chase")
@@ -286,7 +286,7 @@ static void test_suite_keys() {
     for (auto& t : tests)
         for (auto& k : unknown_keys(t))
             CHECK(false, "test '%s': key '%s' is not read by algo '%s' (typo in suite_data.cpp?)", t.name.c_str(),
-                  k.c_str(), t.p.str("algo", "fill").c_str());
+                  k.c_str(), t.algo().c_str());
     for (auto& a : algos())
         CHECK(!algo_keys(a.first).empty() && algo_keys(a.first).count("algo"), "algo '%s' has no key list",
               a.first.c_str());
@@ -311,6 +311,71 @@ static void test_suite_keys() {
               "pagemix test: wrong key report");
         CHECK(unknown_keys(t2[2]) == std::vector<std::string>({"widht"}), "chase test: wrong key report");
     }
+}
+
+// algo_keys() (algo.cpp) holds, by hand, the keys the shared helpers build_vars(), stride_list() and
+// Run::window_lines() read. Record the keys those helpers really look up (Params::reads) and require every algo that
+// calls a helper to list each of its keys: a key added to a helper but not to the list would otherwise be reported as
+// "not used" at run time.
+static void test_shared_key_sets() {
+    using Cfg = std::map<std::string, std::string>;
+    auto record = [](const std::function<void(const Params&)>& call) {
+        std::set<std::string> seen;
+        Params p;
+        p.reads = &seen;
+        call(p);
+        return seen;
+    };
+    // build_vars reads other keys in each data mode, so drive every branch (each config sets all the keys of its
+    // branch)
+    const std::vector<Cfg> dataCfgs = {{{"data", "sat"}, {"sat_width", "32 64"}, {"seed", "1"}},
+                                       {{"data", "hash"}, {"seed", "1"}, {"seeds", "2"}},
+                                       {{"data", "addr"}, {"seed", "1"}, {"seeds", "2"}},
+                                       {{"style", "victim"}, {"victims", "1 2"}, {"altshift", "1"}, {"modulo", "2"}},
+                                       {{"pattern", "0x1"}, {"altshift", "1"}, {"modulo", "2"}}};
+    std::set<std::string> vars, strides, windows;
+    for (const Cfg& c : dataCfgs) {
+        std::set<std::string> seen = record([&](const Params& q) {
+            Params p = q; // copies the recorder pointer
+            p.m = c;
+            build_vars(p, 0, Rng::Default, test_log);
+        });
+        vars.insert(seen.begin(), seen.end());
+    }
+    strides = record([](const Params& q) {
+        Params p = q;
+        p.m["stride"] = "4K";
+        stride_list(p, true);
+    });
+    windows = record([](const Params& q) {
+        Params p = q;
+        p.m["window_mb"] = "64";
+        Run R(test_log);
+        R.layout.T = 1;
+        R.window_lines(p);
+    });
+    // a recorder that saw nothing (or missed the obvious keys) would make every check below pass for no reason
+    CHECK(vars.count("data") && vars.count("seeds") && vars.count("victims") && vars.count("modulo"),
+          "build_vars key recorder missed keys it must see");
+    CHECK(strides.count("stride") && windows.count("window_mb"), "stride/window key recorder saw nothing");
+
+    // which algos call which helper (the algo_*.cpp files; see the comment at the top of each)
+    struct Use {
+        const char* helper;
+        const std::set<std::string>* keys;
+        std::vector<const char*> algos;
+    };
+    const Use uses[] = {
+        {"build_vars", &vars, {"fill", "march", "evolve", "rwstorm", "copy", "hammer"}},
+        {"stride_list", &strides, {"fill", "march", "evolve", "rwstorm"}},
+        {"Run::window_lines", &windows, {"fill", "march", "evolve", "rwstorm", "copy", "hammer", "chase"}},
+    };
+    for (const Use& u : uses)
+        for (const char* a : u.algos)
+            for (const std::string& k : *u.keys)
+                CHECK(algo_keys(a).count(k),
+                      "algo '%s' calls %s, which reads key '%s', but algo_keys() does not list it", a, u.helper,
+                      k.c_str());
 }
 
 // Every key an XOpts lists must change what XOpts::from() returns (a stale entry would hide a typo of that key), and
@@ -948,6 +1013,7 @@ int main() {
     test_evolve();
     test_suite_parses();
     test_suite_keys();
+    test_shared_key_sets();
     test_values();
     test_run_status();
     test_exceptions();
