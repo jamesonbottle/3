@@ -9,6 +9,10 @@
 #  3. fault injection  a build with -DDDR5TEST_INJECT plants known bit flips between write and verify (and, in the evolving-data test, a lost
 #                      write); the tester must report exactly those (exit code 1), and must not hang with --stop-on-error
 #
+# Sanitizer legs: SAN=address,undefined tools/selftest.sh   or   SAN=thread tools/selftest.sh   rebuild everything with -fsanitize=$SAN (-O1 -g)
+#  and run the same checks; any sanitizer report fails the run. SAN=thread runs a reduced set (TSan is 5-15x slower) and leaves out the
+#  read/write storm tests, which race by design (see the comment at the clean-run list). Unset (the default) = the normal build, unchanged.
+#
 # Exits non-zero on the first failed check group. Real DDR5 hardware is NOT needed (or exercised): this proves the detection logic, not the DIMMs.
 set -u
 cd "$(dirname "$0")/.."
@@ -16,7 +20,14 @@ CXX=${CXX:-g++}
 OUT=${OUT:-$(mktemp -d)}
 mkdir -p "$OUT"
 RUN="-mb 64 -t 2 --no-large-pages --test-seconds 3"
-TMO=${TMO:-120}   # every run of the tester is wrapped in timeout: a hang must fail the self-test (exit code 124), not stall CI
+SAN=${SAN:-}
+# every run of the tester is wrapped in timeout: a hang must fail the self-test (exit code 124), not stall CI; sanitized builds are much slower
+if [ -n "$SAN" ]; then TMO=${TMO:-600}; else TMO=${TMO:-120}; fi
+case "$SAN" in
+  thread) export TSAN_OPTIONS="${TSAN_OPTIONS:-} exitcode=66 halt_on_error=0 history_size=4" ;;
+  *address*) export ASAN_OPTIONS="${ASAN_OPTIONS:-} detect_leaks=1 abort_on_error=0 exitcode=66"
+             export UBSAN_OPTIONS="${UBSAN_OPTIONS:-} print_stacktrace=1 halt_on_error=1" ;;
+esac
 fail=0
 ok()   { printf '  PASS  %s\n' "$1"; }
 bad()  { printf '  FAIL  %s\n' "$1"; fail=1; }
@@ -24,7 +35,7 @@ check() { if eval "$2"; then ok "$1"; else bad "$1"; fi; }
 
 echo "== build ($CXX, CMake) -> $OUT"
 # unit_tests, ddr5test_cli (normal engine) and ddr5test_cli_inject (same sources compiled with -DDDR5TEST_INJECT), built by CMake with -Wall -Wextra.
-cmake -S . -B "$OUT/cmake" -DCMAKE_CXX_COMPILER="$CXX" -DDDR5_OUTPUT_DIR="$OUT" > "$OUT/cmake.log" 2>&1 || { cat "$OUT/cmake.log"; exit 2; }
+cmake -S . -B "$OUT/cmake" -DCMAKE_CXX_COMPILER="$CXX" -DDDR5_OUTPUT_DIR="$OUT" -DDDR5_SANITIZE="$SAN" > "$OUT/cmake.log" 2>&1 || { cat "$OUT/cmake.log"; exit 2; }
 cmake --build "$OUT/cmake" --target unit_tests ddr5test_cli ddr5test_cli_inject -j "$(nproc 2>/dev/null || echo 2)" > "$OUT/build.log" 2>&1 || { cat "$OUT/build.log"; exit 2; }
 grep -E "error|warning" "$OUT/build.log" && fail=1
 mv -f "$OUT/ddr5test_cli" "$OUT/cli"; mv -f "$OUT/ddr5test_cli_inject" "$OUT/cli_inject"
@@ -37,6 +48,9 @@ n=0
 for f in "Address-in-address" "Solid and checker" "Stressapptest-style patterns" "Classic marches" "Bus turnaround" "Write/read adjacency" "Normal cached traffic" \
          "Cross-core verify" "Pointer chase" "Bulk copy" "Read/write storm, hash data" "Read/write storm, random on both" "Evolving data" "Cache coherency" "Page shuffle"; do
   n=$((n + 1)); log="$OUT/clean$n.log"; rm -f "$log"
+  # TSan exclusion, on purpose and not a suppression: in the read/write storm the even threads rewrite IDENTICAL data while their partner
+  # verifies it (algo_rwstorm.cpp), so TSan reports a write/read race on every line. The data cannot be wrong, the race is the test.
+  if [ "$SAN" = thread ] && [ "${f#Read/write storm}" != "$f" ]; then echo "  SKIP  clean: $f (races by design, see the comment above)"; continue; fi
   # every run uses a fresh random seed, so a failure here must say which one to repeat with --seed
   check "clean: $f" 'timeout $TMO "$OUT/cli" $RUN -f "$f" --log "$log" > "$OUT/clean$n.out" 2>&1; rc=$?; [ $rc -eq 0 ] && ! grep -q "^ERROR" "$log" 2>/dev/null || { grep "run seed" "$OUT/clean$n.out"; tail -5 "$OUT/clean$n.out"; false; }'
 done

@@ -33,7 +33,7 @@ Dependencies: S9 (split `run_suite`) comes after S1 (RAII) and S8 (enums). Both 
 | S9  | Split `run_suite`             | Readability | Low      | DONE   |
 | S10 | Remove duplication            | Readability | Low      | DONE   |
 | S11 | Stale docs and comments       | Readability | Low      | DONE   |
-| S12 | CI: sanitizers, warnings      | Tooling     | Low      | TODO   |
+| S12 | CI: sanitizers, warnings      | Tooling     | Low      | DONE   |
 
 ## Progress log
 
@@ -53,6 +53,7 @@ Dependencies: S9 (split `run_suite`) comes after S1 (RAII) and S8 (enums). Both 
 | 2026-11-12 | S10     | DONE: `TestDef::algo()`, `with_flush` (pagemix), `Params::reads` recorder + `test_shared_key_sets` (planted missing key is caught); no behavior change, `format.sh --check` and `selftest.sh` pass |
 | 2026-11-12 | S9      | DONE: `SuiteDriver` (friend of `Run`) with one member per step, `run_suite` is a wrapper, `run()` 41 lines; console output and log files identical to the previous build for 9 fixed-seed scenarios (clean, injected, stop-on-error, error paths) + `--fpu`; `selftest.sh` passes |
 | 2026-11-12 | S11     | DONE: README intro (multi-file CMake build, Linux console tool) and test-count history trivia reworded, README notes the `(this test N)` progress field and the stop behaviour; `suite_data.cpp` key header rewritten by hand under `clang-format off` (grouped by data / access / per-algo keys, adds `pagemix` and `coherency`, drops the bogus `inverted` key); duplicate banner and `(M7)` removed in `algo.h`; stale `[default]` / `[test]` config-file wording replaced in `params.h` / `algo.cpp`; one-line glosses for `wo/vo`, `ow/ov/of`, `sq/sg`, `nq/ng`; `format.sh --check` and `selftest.sh` pass |
+| 2026-11-12 | S12     | DONE on Linux, MSVC/Windows parts unbuilt: `g_fpu_sink` and `g_sink` are relaxed `std::atomic`s (old code: `--fpu` under TSan exits 66 with 2 reports, new: clean); CMake option `DDR5_SANITIZE`, `SAN=thread` / `SAN=address,undefined` in `selftest.sh` (-O1 -g, UBSan fatal, `TSAN_OPTIONS`/`ASAN_OPTIONS` set, TMO 600); the TSan leg skips the two read/write storm clean runs with a comment (no suppression file); CI jobs `linux-asan-ubsan` and `linux-tsan` (with `vm.mmap_rnd_bits=28`); MSVC `/W4` added, `/WX` only behind `DDR5_WARNINGS_AS_ERRORS` (off); Windows smoke test also runs `--list` and checks that `--seed 777` is echoed back. Local results: both sanitizer selftests pass (TSan 59 checks 6 min, ASan+UBSan 61 checks 4.5 min, 0 reports); unit tests incl. the `status()` poll clean under TSan |
 
 ---
 
@@ -311,7 +312,7 @@ New (audit): the key-documentation header at the top of `src/suite_data.cpp` - w
 
 ## S12. CI: sanitizers and warnings
 
-**Status:** TODO
+**Status:** DONE on Linux (2026-11-12). NOT done / NOT verified: (a) the new GitHub Actions jobs have never run on a runner (only the same commands locally, g++ 13, Ubuntu 24.04); the `vm.mmap_rnd_bits=28` step is the usual workaround for TSan on newer runner kernels and is untested here; (b) MSVC `/W4` was added but never compiled, so what it reports is unknown: once a Windows build shows the warnings, fix them and set `-DDDR5_WARNINGS_AS_ERRORS=ON` in the CI build (step 5's `/WX`); (c) the Windows smoke-test additions are unrun; step 6's "reproducibility check" is only the echoed seed (the data-level check needs the injection build, which is Linux-only).
 
 **Problem.** The code is heavily multithreaded with lock-free flags and CI has no ASan/UBSan/TSan leg. `-Wall -Wextra` is on and `selftest.sh` already fails on any `warning|error` in the build log, so Linux/g++ already enforces a warning-free build. The gap is MSVC: its flags are only `/O2 /arch:AVX2 /EHsc /utf-8` with no warning level. The Windows job is only a 1-minute smoke test.
 

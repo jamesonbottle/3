@@ -12,6 +12,23 @@ jobs:
           bash tools/format.sh --check
       - name: Engine self-test
         run: bash tools/selftest.sh
+  linux-asan-ubsan:
+    # The same self-test with everything built under -fsanitize=address,undefined: any report (or leak) fails the run.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Engine self-test under AddressSanitizer + UBSan
+        run: SAN=address,undefined bash tools/selftest.sh
+  linux-tsan:
+    # The same self-test under -fsanitize=thread (about 6 minutes). The read/write storm tests are left out inside tools/selftest.sh because
+    # they race by design (the writer rewrites identical data while its partner verifies it); nothing is suppressed.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Lower ASLR entropy (newer runner kernels break TSan's memory layout otherwise)
+        run: sudo sysctl vm.mmap_rnd_bits=28
+      - name: Engine self-test under ThreadSanitizer
+        run: SAN=thread bash tools/selftest.sh
   windows:
     runs-on: windows-latest
     steps:
@@ -22,7 +39,13 @@ jobs:
         run: build.bat
       - name: Smoke test (console build, quick suite, 64 MB)
         shell: cmd
-        run: build\ddr5test_cli.exe -mb 64 -t 2 --quick --minutes 1 --no-large-pages
+        run: build\ddr5test_cli.exe -mb 64 -t 2 --quick --minutes 1 --no-large-pages || exit /b 1
+      - name: Smoke test (--list, and a given seed is echoed back)
+        shell: cmd
+        run: |
+          build\ddr5test_cli.exe --list || exit /b 1
+          build\ddr5test_cli.exe -mb 2 -t 1 --no-large-pages --test-seconds 2 -f "Bulk copy" --seed 777 > seed.out 2>&1 || exit /b 1
+          findstr /C:"run seed: 0x0000000000000309 (given)" seed.out || exit /b 1
       - uses: actions/upload-artifact@v4
         with:
           name: ddr5ramtest

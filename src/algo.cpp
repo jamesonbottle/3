@@ -1,5 +1,6 @@
 // algo.cpp - shared algo helpers and the algo registry (algos()).
 #include "algo.h"
+#include <atomic>
 #include "gen.h"
 #include "lineio.h"
 
@@ -29,7 +30,8 @@ std::vector<u64> stride_list(const Params& P, bool needed) {
 // window sits written. Row activations, refresh collisions and bus noise happen around data that was just stored; the
 // victim is verified afterwards. mode 0 = reads, 1 = writes (scribble), 2 = read+write. Needs window_mb with at least
 // two windows per chunk.
-static volatile u64 g_sink = 0;
+// Keeps the reads of disturb traffic from being optimised away; atomic (relaxed) because every thread updates it.
+static std::atomic<u64> g_sink{0};
 void disturb_traffic(Run& R, const View& d, int mode, u64 passes, u64 seed) {
     Order o;
     o.init(Order::RANDOM, d.n, 1, seed, R.salt);
@@ -40,7 +42,7 @@ void disturb_traffic(Run& R, const View& d, int mode, u64 passes, u64 seed) {
                 Line t;
                 IO<32, 0, 0>::load(a, t);
                 _mm_clflush(a);
-                g_sink = g_sink ^ t.w[0];
+                g_sink.store(g_sink.load(std::memory_order_relaxed) ^ t.w[0], std::memory_order_relaxed);
             }
             if (mode >= 1) {
                 Line l;

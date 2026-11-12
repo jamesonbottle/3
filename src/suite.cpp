@@ -39,7 +39,9 @@ static void emit_skew(const char* prefix, const Stats& s, u64 regionBytes, const
             prefix, out.c_str(), prefix);
 }
 
-static volatile float g_fpu_sink = 0;
+// Keeps the FPU loop from being optimised away. Every FPU thread adds to it, so it is atomic (relaxed: only the
+// side effect matters, a lost update is harmless); a plain or volatile global would be a data race between threads.
+static std::atomic<float> g_fpu_sink{0};
 static void fpu_stress(std::atomic<bool>& stop) {
     plat::lower_priority();
     __m256 x[8];
@@ -52,7 +54,7 @@ static void fpu_stress(std::atomic<bool>& stop) {
                 x[i] = _mm256_add_ps(_mm256_mul_ps(x[i], m), k);
         float t[8];
         _mm256_storeu_ps(t, x[0]);
-        g_fpu_sink = g_fpu_sink + t[0];
+        g_fpu_sink.store(g_fpu_sink.load(std::memory_order_relaxed) + t[0], std::memory_order_relaxed);
     }
 }
 
