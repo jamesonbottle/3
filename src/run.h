@@ -108,7 +108,7 @@ int run_suite(const Settings& s, Run& R); // suite.h: the one function besides R
 //  - the algo-facing part (public, first): what algo_*.cpp may use. The data members are read-only for the algos
 //    (run_suite sets them before the tests start); they reach the shared counters only through the methods.
 //  - the front-end part (public, `Status` and below): what a GUI/CLI needs to follow a run from another thread.
-//  - everything else is private; run_suite is the only outside code that writes it (friend).
+//  - everything else is private; run_suite (through its SuiteDriver, a friend) is the only outside code that writes it.
 //
 // Ownership and threads. One Run serves exactly ONE run_suite call: the totals and error counters are never reset, so
 // a front-end makes a fresh Run per Start (the GUI) or has a single one (the CLI).
@@ -210,7 +210,7 @@ struct Run {
     u64 error_count() const { return errors.errTotal.load(); }
 
   private:
-    friend int run_suite(const Settings& s, Run& R);
+    friend struct SuiteDriver; // suite.cpp: the implementation of run_suite
     void vflush() {
         u64 c = t_vcount;
         t_vcount = 0;

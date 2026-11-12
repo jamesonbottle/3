@@ -30,7 +30,7 @@ Dependencies: S9 (split `run_suite`) comes after S1 (RAII) and S8 (enums). Both 
 | S6  | `status()` race + Ctrl-C      | Reliability | Medium   | DONE   |
 | S7  | Platform robustness           | Reliability | Medium   | DONE   |
 | S8  | Enums and named constants     | Readability | Low      | DONE   |
-| S9  | Split `run_suite`             | Readability | Low      | TODO   |
+| S9  | Split `run_suite`             | Readability | Low      | DONE   |
 | S10 | Remove duplication            | Readability | Low      | DONE   |
 | S11 | Stale docs and comments       | Readability | Low      | TODO   |
 | S12 | CI: sanitizers, warnings      | Tooling     | Low      | TODO   |
@@ -51,6 +51,7 @@ Dependencies: S9 (split `run_suite`) comes after S1 (RAII) and S8 (enums). Both 
 | 2026-11-12 | S7      | DONE on Linux, Windows part unbuilt: `ncpu()`/`pin()` follow `sched_getaffinity` (taskset), `pin()` returns bool and `Run::parallel` warns once, `avail_phys()` from `MemAvailable` with 0 = unknown handled in `run_suite`, `plat::alloc` returns a `note` (why memory is not locked), Windows API results checked; selftest group 2e |
 | 2026-11-12 | S8      | DONE on Linux, GUI edits unbuilt: `Rng`/`CacheMode`/`SuiteSet` enums, `kLineBytes`/`kPageBytes`/`kLinesPerPage`/`kTickLines`/`kStatusWidth`/`kWindowGranuleLines`; fixed-seed error output identical to the pre-change build for all four `--rng` values; `format.sh --check` and `selftest.sh` pass |
 | 2026-11-12 | S10     | DONE: `TestDef::algo()`, `with_flush` (pagemix), `Params::reads` recorder + `test_shared_key_sets` (planted missing key is caught); no behavior change, `format.sh --check` and `selftest.sh` pass |
+| 2026-11-12 | S9      | DONE: `SuiteDriver` (friend of `Run`) with one member per step, `run_suite` is a wrapper, `run()` 41 lines; console output and log files identical to the previous build for 9 fixed-seed scenarios (clean, injected, stop-on-error, error paths) + `--fpu`; `selftest.sh` passes |
 
 ---
 
@@ -250,7 +251,7 @@ Cause: in `src/algo_evolve.cpp` the verify walk runs right after the rewrite pas
 
 ## S9. Split `run_suite`
 
-**Status:** TODO (after S1 and S8)
+**Status:** DONE (2026-11-12). Access settled with one `friend struct SuiteDriver;` in `run.h` (replaces `friend int run_suite`); `run_suite` is now a 2-line wrapper and `SuiteDriver` (in `suite.cpp`) has one member per step: `suite_is_valid` (unknown keys, bad values), `read_settings`, free `select_tests(Settings, tests)` (pure: no Run, no log), `open_error_log` / `close_error_log`, `configure_run`, `size_region` (the 90% / 97% logic, says why on failure), `announce`, `allocate` / `release_region`, `prepare_region`, `run_tests`, `run_one_test`, `print_failure_detail`, `print_final_summary`; the FPU threads moved into a small `FpuThreads` struct. `run()` is 41 lines (was about 188): each acquiring step is followed at once by its `ScopeExit` guard (the S1 guards, same order). Deviations from the steps above: `select_tests` takes no Logger (it logs nothing) and returns the list, an empty one is reported by `run()`; there is no per-test result struct, `run_one_test` returns the bad-line count and the totals stay on `Run` (`R.st` / `R.total`). Verified against a baseline binary built from the previous commit, fixed `--seed`, timing / GB/s / ASLR addresses normalised: clean run, injected fill / evolve, stop-on-error, `--cache bypass`, `--fpu`, no tests selected, bad `--log`, too little memory and `--list` give identical console output and log files; unit tests, `format.sh --check` and `selftest.sh` pass. Page shuffle with injection is time-driven (its output differs between two runs of the *old* binary) so it is not in the comparison.
 
 **Problem.** `run_suite` is about 188 lines and does validation, test selection, memory sizing, allocation, FPU threads, the main loop, the failure report and cleanup in one function.
 
