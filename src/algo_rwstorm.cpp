@@ -38,7 +38,7 @@ RwstormOpts RwstormOpts::from(const Params& P, const Logger& log) {
 void algo_rwstorm(Run& R, const Params& P) {
     auto vars = build_vars(P, R.salt, R.rng, R.log);
     const RwstormOpts opt = RwstormOpts::from(P, R.log);
-    const OrderSpec &wo = opt.write, &vo = opt.verify;
+    const OrderSpec &wo = opt.write, &vo = opt.verify; // wo / vo: write order and verify order
     u64 wl = R.window_lines(P);
     struct Job {
         std::string label;
@@ -61,6 +61,7 @@ void algo_rwstorm(Run& R, const Params& P) {
             bool writer = (tid % 2) == 0;
             int partner = writer ? tid : tid - 1;
             View w = R.view(tid, wl, base + ji), pv = R.view(partner, wl, base + ji);
+            // ow / ov: rewrite own chunk, verify the partner's; of: sequential walk for the fill and the final check
             Order ow, ov, of;
             ow.init(wo.k, w.n, j.stride, 3 + ji, R.salt);
             ov.init(vo.k, pv.n, j.stride, 9 + ji, R.salt);

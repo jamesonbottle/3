@@ -103,8 +103,8 @@ const Keys& algo_keys(const std::string& algo) {
     return i == table.end() ? none : i->second;
 }
 
-// A key the test block set itself must be one its algo understands. A key inherited from [default] (width, flush)
-// reaches every test, so it only has to be understood by some algo.
+// A key the test set itself must be one its algo understands. A key inherited from kDefaults in suite_data.cpp
+// (width, flush) reaches every test, so it only has to be understood by some algo.
 std::vector<std::string> unknown_keys(const TestDef& t) {
     std::vector<std::string> bad;
     const std::string algo = t.algo();

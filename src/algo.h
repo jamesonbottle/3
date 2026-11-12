@@ -68,7 +68,6 @@ struct MVar {
 // `where` (Params::where(), e.g. "test 'x': ") prefixes every message
 std::vector<MVar> parse_march_variants(const std::string& str, const Logger& log, const std::string& where = "");
 
-// ------------------------------------------------------------------ evolving data (algo_evolve.cpp)
 // ------------------------------------------------------------------ algo: evolve (data that changes from pass to pass)
 // Every other data test writes a pattern once, or rewrites IDENTICAL data (rwstorm), so a write that never lands leaves
 // exactly the bytes the test expects: a lost write is invisible to it. Here every line has its own update period
@@ -89,7 +88,7 @@ inline void evo_make(u64 g, u64 gen, u64 seed, Rng rng, Line& o) { // rng: Run::
         o.w[j] = mix64(k + (g << 3) + j, rng); // follows the selected RNG (Advanced > RNG / --rng)
 }
 
-// ------------------------------------------------------------------ typed test options (M7)
+// ------------------------------------------------------------------ typed test options
 // One struct per algo, parsed ONCE before R.parallel: the algo body reads fields, never Params. from() is the only
 // place that reads the algo's own keys; keys() lists them (it feeds algo_keys(), so a misspelled key is reported).
 // Defaults here equal the defaults the algo used with P.num/P.flag before the conversion. Messages for a bad value

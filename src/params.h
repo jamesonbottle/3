@@ -74,8 +74,8 @@ struct Params {
 };
 struct TestDef {
     std::string name;
-    Params p;                  // the [default] values, overridden by the keys of the [test] block
-    std::set<std::string> own; // keys the [test] block itself set (the rest of `p` was inherited from [default])
+    Params p;                  // the kDefaults values, overridden by the test's own keys
+    std::set<std::string> own; // keys the test itself set (the rest of `p` was inherited from kDefaults)
     // Name of the test algorithm (the `algo` key, lower-cased; "fill" when absent). The one place that decides this.
     std::string algo() const { return lower(p.str("algo", "fill")); }
 };

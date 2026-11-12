@@ -48,7 +48,7 @@ EvolveOpts EvolveOpts::from(const Params& P, const Logger& log) {
 void algo_evolve(Run& R, const Params& P) {
     auto vars = build_vars(P, R.salt, R.rng, R.log); // data = hash: one variant per seed (seeds = N)
     const EvolveOpts opt = EvolveOpts::from(P, R.log);
-    const OrderSpec &wo = opt.write, &vo = opt.verify;
+    const OrderSpec &wo = opt.write, &vo = opt.verify; // wo / vo: write order and verify order
     u64 wl = R.window_lines(P);
     struct Job {
         std::string label;
@@ -70,7 +70,7 @@ void algo_evolve(Run& R, const Params& P) {
             if (tid == 0)
                 R.set_label(j.label);
             View w = R.view(tid, wl, base + ji), vw = R.view(opt.cross ? (tid + 1) % R.layout.T : tid, wl, base + ji);
-            Order ow, ov;
+            Order ow, ov; // ow / ov: the write and the verify walk over this job's windows
             ow.init(wo.k, w.n, j.stride, 21 + ji, R.salt);
             ov.init(vo.k, vw.n, j.stride, 55 + ji, R.salt);
             dispatch(opt.width, opt.nt, opt.flush, [&](auto Wc, auto NTc, auto FLc) {

@@ -172,14 +172,14 @@ void algo_pagemix(Run& R, const Params& P) {
             }
             u8* sa = R.layout.region + s * kPageBytes;
             u8* da = R.layout.region + d * kPageBytes;
-            PagePat sq = pp[s];
+            PagePat sq = pp[s]; // sq / sg: the source page's pattern and its generator
             Gen sg = gen(sq);
             if (op <= 5) {
                 with_flush(fl, [&](auto FLc) { pm_copy<decltype(FLc)::value>(R, tid, sa, da, sg, sq.inv); });
                 pp[d] = sq;
                 R.add_done(8192);
             } else if (op == 6) {
-                PagePat nq = pick(nx());
+                PagePat nq = pick(nx()); // nq / ng: the new pattern for the refill and its generator
                 Gen ng = gen(nq);
                 with_flush(fl, [&](auto FLc) { pm_fill<decltype(FLc)::value>(sa, ng, nq.inv); });
                 pp[s] = nq;

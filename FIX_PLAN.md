@@ -32,7 +32,7 @@ Dependencies: S9 (split `run_suite`) comes after S1 (RAII) and S8 (enums). Both 
 | S8  | Enums and named constants     | Readability | Low      | DONE   |
 | S9  | Split `run_suite`             | Readability | Low      | DONE   |
 | S10 | Remove duplication            | Readability | Low      | DONE   |
-| S11 | Stale docs and comments       | Readability | Low      | TODO   |
+| S11 | Stale docs and comments       | Readability | Low      | DONE   |
 | S12 | CI: sanitizers, warnings      | Tooling     | Low      | TODO   |
 
 ## Progress log
@@ -52,6 +52,7 @@ Dependencies: S9 (split `run_suite`) comes after S1 (RAII) and S8 (enums). Both 
 | 2026-11-12 | S8      | DONE on Linux, GUI edits unbuilt: `Rng`/`CacheMode`/`SuiteSet` enums, `kLineBytes`/`kPageBytes`/`kLinesPerPage`/`kTickLines`/`kStatusWidth`/`kWindowGranuleLines`; fixed-seed error output identical to the pre-change build for all four `--rng` values; `format.sh --check` and `selftest.sh` pass |
 | 2026-11-12 | S10     | DONE: `TestDef::algo()`, `with_flush` (pagemix), `Params::reads` recorder + `test_shared_key_sets` (planted missing key is caught); no behavior change, `format.sh --check` and `selftest.sh` pass |
 | 2026-11-12 | S9      | DONE: `SuiteDriver` (friend of `Run`) with one member per step, `run_suite` is a wrapper, `run()` 41 lines; console output and log files identical to the previous build for 9 fixed-seed scenarios (clean, injected, stop-on-error, error paths) + `--fpu`; `selftest.sh` passes |
+| 2026-11-12 | S11     | DONE: README intro (multi-file CMake build, Linux console tool) and test-count history trivia reworded, README notes the `(this test N)` progress field and the stop behaviour; `suite_data.cpp` key header rewritten by hand under `clang-format off` (grouped by data / access / per-algo keys, adds `pagemix` and `coherency`, drops the bogus `inverted` key); duplicate banner and `(M7)` removed in `algo.h`; stale `[default]` / `[test]` config-file wording replaced in `params.h` / `algo.cpp`; one-line glosses for `wo/vo`, `ow/ov/of`, `sq/sg`, `nq/ng`; `format.sh --check` and `selftest.sh` pass |
 
 ---
 
@@ -289,7 +290,7 @@ Cause: in `src/algo_evolve.cpp` the verify walk runs right after the rewrite pas
 
 ## S11. Stale docs and comments
 
-**Status:** TODO
+**Status:** DONE (2026-11-12). Not touched: the algo banners that clang-format reflowed into a run-on (for example `algo_coherency.cpp`, `algo_hammer.cpp`); they read acceptably and fixing them needs `clang-format off` around each.
 
 **Problem.** README says "single-file Windows memory tester" although the project is a multi-file CMake build; it also carries history trivia ("87 consolidated into 35..."). `src/algo.h` has a duplicated banner around the evolving-data section and a leftover "(M7)" milestone tag (the only `(M<n>)` tag in the tree). Short variable names (`sg`, `nq`, `ow/ov`, `wo/vo`) lack a one-line gloss at their first use. The README test counts (28 tests, 12 quick) are correct (asserted by the unit tests).
 

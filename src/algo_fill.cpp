@@ -51,7 +51,7 @@ FillOpts FillOpts::from(const Params& P, const Logger& log) {
 void algo_fill(Run& R, const Params& P) {
     auto vars = build_vars(P, R.salt, R.rng, R.log);
     const FillOpts o = FillOpts::from(P, R.log);
-    const OrderSpec &wo = o.write, &vo = o.verify;
+    const OrderSpec &wo = o.write, &vo = o.verify; // wo / vo: write order and verify order
     u64 wl = R.window_lines(P);
     std::vector<int> dmodes = o.disturb;
     if (dmodes[0] >= 0 && !disturb_possible(R, wl, R.testName.c_str()))
@@ -86,7 +86,7 @@ void algo_fill(Run& R, const Params& P) {
             if (tid == 0)
                 R.set_label(j.label);
             View w = R.view(tid, wl, base + ji), vw = R.view(o.cross ? (tid + 1) % R.layout.T : tid, wl, base + ji);
-            Order ow, ov;
+            Order ow, ov; // ow / ov: the write and the verify walk over this job's windows
             ow.init(wo.k, w.n, j.stride, 1 + ji, R.salt);
             ov.init(vo.k, vw.n, j.stride, 77 + ji, R.salt);
             dispatch(o.width, o.nt, o.flush, [&](auto Wc, auto NTc, auto FLc) {
