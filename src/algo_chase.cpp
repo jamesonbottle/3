@@ -70,13 +70,15 @@ void algo_chase(Run& R, const Params& P) {
                 R.sync();
                 u64 steps = w.n / K;
                 DDR5_INJECT(chase_after_fill, tid, sd, K, w, o, steps);
-                std::vector<u64> p(K), bad(K, 0);
-                for (u64 k = 0; k < K; k++)
-                    p[k] = o.at(k * steps);
+                // p[k]: line chain k is on; pos[k]: its place in the order (where the chain should be, whatever the
+                // memory says)
+                std::vector<u64> p(K), pos(K);
+                for (u64 k = 0; k < K; k++) {
+                    pos[k] = k * steps;
+                    p[k] = o.at(pos[k]);
+                }
                 for (u64 st = 0; st < steps && !R.stop; st++) {
                     for (u64 k = 0; k < K; k++) {
-                        if (bad[k])
-                            continue;
                         const u8* a = w.base + p[k] * kLineBytes;
                         Line act, e;
                         CBAR();
@@ -87,10 +89,12 @@ void algo_chase(Run& R, const Params& P) {
                         R.vtick();
                         if (memcmp(&act, &e, kLineBytes) != 0 || act.w[0] >= w.n) {
                             R.report(tid, a, e, act, "chase");
-                            bad[k] = 1;
-                            continue;
-                        }
-                        p[k] = act.w[0];
+                            // The stored pointer cannot be trusted. Carry on from the order's own next line, so the
+                            // rest of the chain is still checked and every bad line is counted.
+                            p[k] = o.at(pos[k] + 1 == w.n ? 0 : pos[k] + 1);
+                        } else
+                            p[k] = act.w[0]; // the next address comes from the data just loaded: a dependent load
+                        pos[k]++;
                     }
                     if (((st + 1) & 0xFFFF) == 0) {
                         R.add_done(kTickLines * kLineBytes * K);

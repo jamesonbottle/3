@@ -8,6 +8,7 @@
 #include "algo.h"
 #include "lineio.h"
 #include "run.h"
+#include <atomic>
 #include <cstdlib>
 #include <stdexcept>
 
@@ -48,13 +49,15 @@ void march_after_element(int tid, size_t ji, size_t ei, const View& w) {
     }
 }
 
-// self-test only (chase, 32 chains of the first seed, after the lines are written): thread 0 corrupts two lines that
-// lie in DIFFERENT chains - a payload bit in chain 0 and bit 0 of the next-index word in chain 1. A chain stops at its
-// first bad line, so two faults in one chain would be reported once; in separate chains each is reported exactly once.
+// self-test only (chase, 32 chains of the first seed, after the lines are written): thread 0 corrupts three lines, one
+// bit each: a payload bit and a next-index bit (bit 0 of word 0) in chain 0, and a next-index bit in chain 1. Two of
+// the faults are in ONE chain, and the one in the pointer word sends the walk astray if it follows the stored pointer:
+// all three must still be reported, once each. That is what proves a chain keeps going after a bad line.
 void chase_after_fill(int tid, u64 sd, u64 K, const View& w, const Order& o, u64 steps) {
     if (tid == 0 && sd == 0 && K == 32 && steps > 64) {
-        flip(w.base, o.at(steps / 2), 40, 0x10); // chain 0 covers order positions [0, steps)
-        flip(w.base, o.at(steps + 7), 0, 0x01);  // chain 1 covers [steps, 2 * steps)
+        flip(w.base, o.at(steps / 2), 40, 0x10);    // chain 0 covers order positions [0, steps)
+        flip(w.base, o.at(steps / 2 + 3), 0, 0x01); // chain 0 again, a few lines on
+        flip(w.base, o.at(steps + 7), 0, 0x01);     // chain 1 covers [steps, 2 * steps)
         _mm_mfence();
     }
 }
@@ -81,6 +84,17 @@ void rwstorm_before_final(int tid, size_t ji, const View& w) {
         flip(w.base, 4097, 8, 0x01);
         _mm_mfence();
     }
+}
+
+// self-test only (rwstorm, first job): one read-side fault, once. The first time thread 1 - which only reads, and
+// during the passes reads thread 0's chunk while thread 0 rewrites it - reaches line 1234, one bit of the line it
+// expects is flipped, so the compare sees what a read error would look like. Memory cannot be corrupted for this path:
+// the writer would rewrite the line and heal it, and the partner would find it only by chance. The fault is a one-shot,
+// so the later passes and the final check read the line as usual.
+void rwstorm_read_fault(int tid, size_t ji, u64 i, Line& e) {
+    static std::atomic<bool> fired{false};
+    if (tid == 1 && ji == 0 && i == 1234 && !fired.exchange(true))
+        e.w[2] ^= 0x100;
 }
 
 // self-test only, last pass: (1) undo one rewrite = a lost write, (2) flip one bit in a line

@@ -80,6 +80,7 @@ void algo_rwstorm(Run& R, const Params& P) {
                         const u8* a = v.base + i * kLineBytes;
                         Line e, act;
                         j.g->make(v.g + i, a, false, e);
+                        DDR5_INJECT(rwstorm_read_fault, tid, ji, i, e);
                         R.vtick();
                         if (!io::verify(a, e, act))
                             R.report(tid, a, e, act, "rwstorm-read");

@@ -151,7 +151,7 @@ timeout $TMO "$OUT/cli_inject" $RUN -f "Classic marches" --log "$log" > "$OUT/in
 check "march: exit 1, exactly the 3 planted lines (5 bits) found by the read right after the write element" '[ $rc -eq 1 ] && [ "$(grep -c "^ERROR" "$log")" = "3" ] && [ "$(grep -c "march el1 r0" "$log")" = "3" ] && grep -q "3 bad lines, 5 bits" "$OUT/inj_march.out" || { echo "    rc=$rc ERROR lines: $(grep -c "^ERROR" "$log" 2>/dev/null)"; grep "run seed" "$OUT/inj_march.out"; false; }'
 log="$OUT/inj_chase.log"; rm -f "$log"
 timeout $TMO "$OUT/cli_inject" $RUN -f "Pointer chase" --log "$log" > "$OUT/inj_chase.out" 2>&1; rc=$?
-check "chase: exit 1, exactly the payload flip and the pointer flip (2 chains, 2 bits) found" '[ $rc -eq 1 ] && [ "$(grep -c "^ERROR" "$log")" = "2" ] && [ "$(grep -c " chase thr=0 " "$log")" = "2" ] && grep -q "2 bad lines, 2 bits" "$OUT/inj_chase.out" || { echo "    rc=$rc ERROR lines: $(grep -c "^ERROR" "$log" 2>/dev/null)"; grep "run seed" "$OUT/inj_chase.out"; false; }'
+check "chase: exit 1, all 3 planted lines found (2 in one chain, one of them a pointer flip, plus 1 in another chain; 3 bits)" '[ $rc -eq 1 ] && [ "$(grep -c "^ERROR" "$log")" = "3" ] && [ "$(grep -c " chase thr=0 " "$log")" = "3" ] && grep -q "3 bad lines, 3 bits" "$OUT/inj_chase.out" || { echo "    rc=$rc ERROR lines: $(grep -c "^ERROR" "$log" 2>/dev/null)"; grep "run seed" "$OUT/inj_chase.out"; false; }'
 log="$OUT/inj_copy.log"; rm -f "$log"
 timeout $TMO "$OUT/cli_inject" $RUN -f "Bulk copy" --log "$log" > "$OUT/inj_copy.out" 2>&1; rc=$?
 check "copy: exit 1, exactly 2 corrupted destination lines and 1 corrupted source line (4 bits) found" '[ $rc -eq 1 ] && [ "$(grep -c "^ERROR" "$log")" = "3" ] && [ "$(grep -c "copy-dst" "$log")" = "2" ] && [ "$(grep -c "copy-src" "$log")" = "1" ] && grep -q "3 bad lines, 4 bits" "$OUT/inj_copy.out" || { echo "    rc=$rc ERROR lines: $(grep -c "^ERROR" "$log" 2>/dev/null)"; grep "run seed" "$OUT/inj_copy.out"; false; }'
@@ -161,7 +161,7 @@ if [ "$SAN" = thread ]; then
   echo "  SKIP  rwstorm injection (races by design, see the comment at the clean-run list)"
 else
   timeout $TMO "$OUT/cli_inject" $RUN -f "Read/write storm, hash data" --log "$log" > "$OUT/inj_rw.out" 2>&1; rc=$?
-  check "rwstorm: exit 1, exactly the 2 planted lines (3 bits) found by the final check" '[ $rc -eq 1 ] && [ "$(grep -c "^ERROR" "$log")" = "2" ] && [ "$(grep -c "rwstorm-read" "$log")" = "2" ] && grep -q "2 bad lines, 3 bits" "$OUT/inj_rw.out" || { echo "    rc=$rc ERROR lines: $(grep -c "^ERROR" "$log" 2>/dev/null)"; grep "run seed" "$OUT/inj_rw.out"; false; }'
+  check "rwstorm: exit 1, 2 planted lines found by the final check (thr 0) and 1 read-side fault by the concurrent verify (thr 1); 4 bits" '[ $rc -eq 1 ] && [ "$(grep -c "^ERROR" "$log")" = "3" ] && [ "$(grep -c "rwstorm-read thr=0 " "$log")" = "2" ] && [ "$(grep -c "rwstorm-read thr=1 " "$log")" = "1" ] && grep -q "3 bad lines, 4 bits" "$OUT/inj_rw.out" || { echo "    rc=$rc ERROR lines: $(grep -c "^ERROR" "$log" 2>/dev/null)"; grep "run seed" "$OUT/inj_rw.out"; false; }'
 fi
 log="$OUT/inj_throw.log"; rm -f "$log"
 DDR5TEST_THROW_IN_WORKER=1 timeout $TMO "$OUT/cli_inject" $RUN -f "Solid and checker" --fpu --log "$log" > "$OUT/inj_throw.out" 2>&1; rc=$?
