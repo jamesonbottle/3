@@ -9,8 +9,12 @@ void Run::report(int tid, const u8* addr, const Line& e, const Line& a, const ch
     if (aborted.load(std::memory_order_relaxed))
         return; // a worker has failed (run_suite will return 3): the data the others still compare is incomplete, so a
                 // mismatch is no evidence about the memory
-    const u32* eb = (const u32*)&e;
-    const u32* ab = (const u32*)&a;
+    // beat b = the b-th 32-bit word of the line in memory order; memcpy (not a u32* cast of the Line) keeps this free
+    // of strict-aliasing questions, and the compiler turns it into plain loads
+    static_assert(sizeof(Line) == kLineBytes, "Run::report reads a Line as 16 beats of 32 bits");
+    u32 eb[16], ab[16];
+    memcpy(eb, &e, kLineBytes);
+    memcpy(ab, &a, kLineBytes);
     int perblk[4] = {0, 0, 0, 0};
     u64 bits = 0;
     u32 lanemask = 0, beatmask = 0;
