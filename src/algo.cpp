@@ -30,11 +30,14 @@ std::vector<u64> stride_list(const Params& P, bool needed) {
 // window sits written. Row activations, refresh collisions and bus noise happen around data that was just stored; the
 // victim is verified afterwards. mode 0 = reads, 1 = writes (scribble), 2 = read+write. Needs window_mb with at least
 // two windows per chunk.
-// Keeps the reads of disturb traffic from being optimised away; atomic (relaxed) because every thread updates it.
+// Keeps the reads of disturb traffic from being optimised away. Each call folds what it read into a LOCAL accumulator
+// (a register) and publishes it once at the end with a relaxed atomic xor: one shared write per call instead of one per
+// line, so the threads do not bounce the cache line of this variable between cores while they generate the traffic.
 static std::atomic<u64> g_sink{0};
 void disturb_traffic(Run& R, const View& d, int mode, u64 passes, u64 seed) {
     Order o;
     o.init(Order::RANDOM, d.n, 1, seed, R.salt);
+    u64 acc = 0;
     for (u64 p = 0; p < passes && !R.stop; p++)
         walk(R, o, false, [&](u64 i) {
             u8* a = d.base + i * kLineBytes;
@@ -42,7 +45,7 @@ void disturb_traffic(Run& R, const View& d, int mode, u64 passes, u64 seed) {
                 Line t;
                 IO<32, 0, 0>::load(a, t);
                 _mm_clflush(a);
-                g_sink.store(g_sink.load(std::memory_order_relaxed) ^ t.w[0], std::memory_order_relaxed);
+                acc ^= t.w[0];
             }
             if (mode >= 1) {
                 Line l;
@@ -51,6 +54,7 @@ void disturb_traffic(Run& R, const View& d, int mode, u64 passes, u64 seed) {
                 IO<32, 0, 1>::store(a, l);
             }
         });
+    g_sink.fetch_xor(acc, std::memory_order_relaxed);
 }
 int parse_dmode(const std::string& s) {
     return s == "r" || s == "read" ? 0 : s == "w" || s == "write" ? 1 : s == "rw" ? 2 : -1;
