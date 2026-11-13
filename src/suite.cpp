@@ -87,9 +87,9 @@ struct FpuThreads {
 };
 
 // The tests of the built-in suite that this run was asked for (enabled, in the quick set, matching -f, with a known
-// algo), with the run's overrides applied: --test-seconds caps `seconds`, --cache sets flush / nt where the algo has
-// them.
-static std::vector<TestDef> select_tests(const Settings& s, std::vector<TestDef> tests) {
+// algo), with the run's overrides applied: --test-seconds caps `seconds`, --cache sets flush / nt in every algo that
+// lists that key in algo_keys() (so a new algo with those keys gets the override without a change here).
+std::vector<TestDef> select_tests(const Settings& s, std::vector<TestDef> tests) {
     std::vector<TestDef> sel;
     const std::string flt = lower(s.filter);
     for (auto& t : tests) {
@@ -104,9 +104,12 @@ static std::vector<TestDef> select_tests(const Settings& s, std::vector<TestDef>
             continue;
         if (s.testSeconds && t.p.has("seconds"))
             t.p.m["seconds"] = std::to_string(std::min<u64>(t.p.num("seconds", s.testSeconds), s.testSeconds));
-        if (s.cacheMode != CacheMode::Default && (algo == "fill" || algo == "march" || algo == "rwstorm")) {
-            t.p.m["flush"] = s.cacheMode == CacheMode::Bypass ? "1" : "0";
-            t.p.m["nt"] = s.cacheMode == CacheMode::NonTemporal ? "1" : "0";
+        if (s.cacheMode != CacheMode::Default) {
+            const auto& keys = algo_keys(algo);
+            if (keys.count("flush"))
+                t.p.m["flush"] = s.cacheMode == CacheMode::Bypass ? "1" : "0";
+            if (keys.count("nt"))
+                t.p.m["nt"] = s.cacheMode == CacheMode::NonTemporal ? "1" : "0";
         }
         t.p.test = t.name; // so a message from the algo's option parsing says which test it is about
         sel.push_back(t);

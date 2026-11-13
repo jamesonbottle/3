@@ -313,6 +313,55 @@ static void test_suite_keys() {
     }
 }
 
+// --cache (Settings::cacheMode) must reach every algo that has a flush / nt key, evolve included, and must not add the
+// key to an algo that lacks it. Checked over the whole built-in suite for each of the three overriding modes.
+static void test_cache_override() {
+    const struct {
+        CacheMode mode;
+        const char* flush;
+        const char* nt;
+        const char* name;
+    } modes[] = {{CacheMode::Bypass, "1", "0", "bypass"},
+                 {CacheMode::Cached, "0", "0", "cached"},
+                 {CacheMode::NonTemporal, "0", "1", "nt"}};
+    std::set<std::string> seenFlush, seenNt; // algos that took part, to show the check is not vacuous
+    for (const auto& m : modes) {
+        Settings s;
+        s.cacheMode = m.mode;
+        std::vector<TestDef> sel = select_tests(s, builtin_suite());
+        CHECK(sel.size() == 28, "--cache %s: expected all 28 tests selected, got %zu", m.name, sel.size());
+        for (auto& t : sel) {
+            const std::string algo = t.algo();
+            const auto& keys = algo_keys(algo);
+            if (keys.count("flush")) {
+                seenFlush.insert(algo);
+                CHECK(t.p.str("flush") == m.flush, "--cache %s: test '%s' (algo %s) has flush='%s', expected '%s'",
+                      m.name, t.name.c_str(), algo.c_str(), t.p.str("flush").c_str(), m.flush);
+            }
+            if (keys.count("nt")) {
+                seenNt.insert(algo);
+                CHECK(t.p.str("nt") == m.nt, "--cache %s: test '%s' (algo %s) has nt='%s', expected '%s'", m.name,
+                      t.name.c_str(), algo.c_str(), t.p.str("nt").c_str(), m.nt);
+            }
+            // an algo without the key must not gain it from the override (kDefaults may give it flush, so only nt is
+            // checked for absence when the test did not set it itself)
+            if (!keys.count("nt"))
+                CHECK(!t.p.has("nt"), "--cache %s: test '%s' (algo %s) gained an nt key it does not read", m.name,
+                      t.name.c_str(), algo.c_str());
+        }
+    }
+    for (const char* a : {"fill", "march", "rwstorm", "evolve"}) {
+        CHECK(seenFlush.count(a), "--cache check never saw algo '%s' with a flush key", a);
+        CHECK(seenNt.count(a), "--cache check never saw algo '%s' with an nt key", a);
+    }
+
+    // Default leaves the suite's own values alone
+    Settings d;
+    std::vector<TestDef> base = builtin_suite(), sel = select_tests(d, builtin_suite());
+    for (size_t i = 0; i < sel.size() && i < base.size(); i++)
+        CHECK(sel[i].p.m == base[i].p.m, "--cache default changed the parameters of test '%s'", sel[i].name.c_str());
+}
+
 // algo_keys() (algo.cpp) holds, by hand, the keys the shared helpers build_vars(), stride_list() and
 // Run::window_lines() read. Record the keys those helpers really look up (Params::reads) and require every algo that
 // calls a helper to list each of its keys: a key added to a helper but not to the list would otherwise be reported as
@@ -1013,6 +1062,7 @@ int main() {
     test_evolve();
     test_suite_parses();
     test_suite_keys();
+    test_cache_override();
     test_shared_key_sets();
     test_values();
     test_run_status();

@@ -45,6 +45,9 @@ struct Settings {
 };
 
 std::vector<TestDef> builtin_suite(); // the 28 built-in tests, defined as code in suite_data.cpp
+// The tests a run with these settings executes: filters applied, --test-seconds and --cache overrides written into the
+// parameters. Exposed for the unit tests; run_suite() is the only production caller.
+std::vector<TestDef> select_tests(const Settings& s, std::vector<TestDef> tests);
 // Runs the built-in suite until finished or R.stop. Follow it from another thread with R.status() / R.error_count().
 int run_suite(const Settings& s, Run& R);
 
