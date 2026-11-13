@@ -150,7 +150,15 @@ timeout $TMO "$OUT/cli_inject" $RUN -f "Page shuffle" --log "$log" > "$OUT/inj_p
 check "page shuffle: exit 1, flip caught in final verify" '[ $rc -eq 1 ] && grep -q "pagemix-final" "$log"'
 log="$OUT/inj_pagestop.log"; rm -f "$log"
 DDR5TEST_STOP_IN_FILL=1 timeout $TMO "$OUT/cli_inject" $RUN -f "Page shuffle" --log "$log" > "$OUT/inj_pagestop.out" 2>&1; rc=$?
-check "page shuffle: stopped mid-fill reports only the planted flip (pages never filled are not verified)" '[ $rc -eq 1 ] && [ "$(grep -c "^ERROR" "$log")" = "1" ] || { echo "    ERROR lines: $(grep -c "^ERROR" "$log")"; false; }'
+check "page shuffle: stopped mid-fill (hard stop): the final verify is skipped, so not even the planted flip is reported, and no false error from pages never filled" '[ $rc -eq 0 ] && [ "$(grep -c "^ERROR" "$log")" = "0" ] || { echo "    rc=$rc ERROR lines: $(grep -c "^ERROR" "$log")"; false; }'
+# hard stop in the final verify: a flip planted in the LAST page is found by a verify that runs to the end, and not found when stop is raised
+# at page 1000 (the verify ends at its next page). The off= of the error tells which page: the last page of 64 MiB starts at 0x3FFF000.
+log="$OUT/inj_late.log"; rm -f "$log"
+DDR5TEST_FINAL_LATE_FLIP=1 timeout $TMO "$OUT/cli_inject" $RUN -f "Page shuffle" --log "$log" > "$OUT/inj_late.out" 2>&1; rc=$?
+check "page shuffle: flip in the last page is found when the final verify runs to the end (control)" '[ $rc -eq 1 ] && grep "^ERROR" "$log" | grep -q "pagemix-final.* off=0x3FFF[0-9A-F]* " || { echo "    rc=$rc"; grep "^ERROR" "$log" | cut -c1-140; false; }'
+log="$OUT/inj_latestop.log"; rm -f "$log"
+DDR5TEST_FINAL_LATE_FLIP=1 DDR5TEST_STOP_IN_FINAL=1 timeout $TMO "$OUT/cli_inject" $RUN -f "Page shuffle" --log "$log" > "$OUT/inj_latestop.out" 2>&1; rc=$?
+check "page shuffle: stop raised during the final verify ends it: the late flip is not reported, nothing false is" '[ $rc -le 1 ] && ! grep "^ERROR" "$log" | grep -q " off=0x3FFF[0-9A-F]* " && [ "$(grep "^ERROR" "$log" | grep -vc "pagemix-final.* off=0x3[0-9A-F]\{3\} ")" = "0" ] || { echo "    rc=$rc"; grep "^ERROR" "$log" | cut -c1-140; false; }'
 log="$OUT/inj_coh.log"; rm -f "$log"
 timeout $TMO "$OUT/cli_inject" $RUN -f "Cache coherency" --log "$log" > "$OUT/inj_coh.out" 2>&1; rc=$?
 check "coherency: exit 1, lost increment caught"          '[ $rc -eq 1 ] && grep -q "coherency" "$log"'
@@ -171,6 +179,9 @@ check "chase: exit 1, all 3 planted lines found (2 in one chain, one of them a p
 log="$OUT/inj_copy.log"; rm -f "$log"
 timeout $TMO "$OUT/cli_inject" $RUN -f "Bulk copy" --log "$log" > "$OUT/inj_copy.out" 2>&1; rc=$?
 check "copy: exit 1, exactly 2 corrupted destination lines and 1 corrupted source line (4 bits) found" '[ $rc -eq 1 ] && [ "$(grep -c "^ERROR" "$log")" = "3" ] && [ "$(grep -c "copy-dst" "$log")" = "2" ] && [ "$(grep -c "copy-src" "$log")" = "1" ] && grep -q "3 bad lines, 4 bits" "$OUT/inj_copy.out" || { echo "    rc=$rc ERROR lines: $(grep -c "^ERROR" "$log" 2>/dev/null)"; grep "run seed" "$OUT/inj_copy.out"; false; }'
+log="$OUT/inj_copystop.log"; rm -f "$log"
+DDR5TEST_STOP_IN_COPY_FILL=1 timeout $TMO "$OUT/cli_inject" $RUN -f "Bulk copy" --log "$log" > "$OUT/inj_copystop.out" 2>&1; rc=$?
+check "copy: stopped mid-fill ends the fill, skips copy and verify: exit 0, nothing reported (neither the planted faults nor never-written lines)" '[ $rc -eq 0 ] && [ "$(grep -c "^ERROR" "$log")" = "0" ] && grep -q " STOP " "$OUT/inj_copystop.out" || { echo "    rc=$rc ERROR lines: $(grep -c "^ERROR" "$log")"; tail -4 "$OUT/inj_copystop.out"; false; }'
 log="$OUT/inj_rw.log"; rm -f "$log"
 # TSan exclusion, same reason as in the clean runs: the writer and its verifying partner race by design
 if [ "$SAN" = thread ]; then
@@ -185,6 +196,43 @@ check "worker exception: exit 3 and 'internal error' logged (no terminate, no ha
 log="$OUT/inj_stop.log"; rm -f "$log"
 timeout $TMO "$OUT/cli_inject" $RUN -f "Solid and checker" --stop-on-error --log "$log" > "$OUT/inj_stop.out" 2>&1; rc=$?
 check "stop-on-error: exit 1 and no hang (barrier shutdown)" '[ $rc -eq 1 ]'
+
+echo "== 4. stop: SIGINT at several moments in every test; the run must end within STOPWAIT seconds, exit 0, report no error"
+# The first Ctrl-C is the stop request (the CLI ends the current step and prints the summary). Every test runs alone on 128 MiB, so the
+# signal lands in different phases (first touch, fill, copy / timed part, verify) depending on the moment. A loop without a stop check shows up
+# as a run still alive STOPWAIT seconds after the signal (it is then killed); a stop that verifies half-written data shows up as an ERROR line.
+STOPWAIT=${STOPWAIT:-5}
+case "$SAN" in *address*) STOPWAIT=$((STOPWAIT * 3)) ;; esac
+STOPAT="0.1 0.5 1.2 2.5"
+# stop_test_ok NAME: true if every moment in $STOPAT passes; says which one did not
+stop_test_ok() {
+  local d p i hit
+  for d in $STOPAT; do
+    rm -f "$OUT/stp.log"
+    "$OUT/cli" -mb 128 -t 2 --no-large-pages --test-seconds 20 -f "$1" --log "$OUT/stp.log" > "$OUT/stp.out" 2>&1 < /dev/null &
+    p=$!; sleep "$d"
+    hit=1; kill -INT $p 2>/dev/null || hit=0
+    i=0
+    while kill -0 $p 2>/dev/null; do
+      i=$((i + 1))
+      if [ $i -gt $((STOPWAIT * 10)) ]; then kill -9 $p 2>/dev/null; wait $p 2>/dev/null; echo "    SIGINT after ${d}s: still running ${STOPWAIT}s later (killed); last line: $(tail -1 "$OUT/stp.out")"; return 1; fi
+      sleep 0.1
+    done
+    wait $p; rc=$?
+    if [ $rc -ne 0 ] || grep -q "^ERROR" "$OUT/stp.log" 2>/dev/null; then
+      echo "    SIGINT after ${d}s (running: $hit): rc=$rc ERROR lines: $(grep -c "^ERROR" "$OUT/stp.log" 2>/dev/null)"; grep "run seed" "$OUT/stp.out"; tail -3 "$OUT/stp.out"; return 1
+    fi
+  done
+}
+if [ "$SAN" = thread ]; then
+  echo "  SKIP  stop checks under TSan (the read/write storm tests race by design and TSan is too slow for the timing)"
+else
+  mapfile -t STOPNAMES < <("$OUT/cli" --list | sed -E 's/^ *[0-9]+ +(Q +)?[a-z0-9]+ +//')
+  check "the built-in suite lists 28 tests to stop-test" '[ ${#STOPNAMES[@]} -eq 28 ]'
+  for TNAME in "${STOPNAMES[@]}"; do
+    check "stop: $TNAME" 'stop_test_ok "$TNAME"'
+  done
+fi
 
 echo
 if [ $fail -eq 0 ]; then echo "SELFTEST PASSED"; else echo "SELFTEST FAILED (outputs in $OUT)"; fi

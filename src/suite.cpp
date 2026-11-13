@@ -303,7 +303,13 @@ struct SuiteDriver {
         R.layout.chunks.clear();
         for (int t = 0; t < R.layout.T; t++)
             R.layout.chunks.push_back({R.layout.region + (u64)t * per, per / kLineBytes, (u64)t * (per / kLineBytes)});
-        R.parallel([&](int tid) { std::memset(R.layout.chunks[tid].base, 0, per); });
+        // First touch of every page. Done in slices so that Stop is honoured within a fraction of a second even when a
+        // thread owns many GB; a stop here leaves the rest untouched and run_tests() then starts nothing.
+        R.parallel([&](int tid) {
+            const u64 slice = 64ull << 20;
+            for (u64 off = 0; off < per && !R.stop.load(std::memory_order_relaxed); off += slice)
+                std::memset(R.layout.chunks[tid].base + off, 0, std::min(slice, per - off));
+        });
         std::string hdr;
         appendf(hdr, "---- ddr5test run, %.2f GiB, %d threads, seed 0x%016llX ----\n", total / 1073741824.0, R.layout.T,
                 (unsigned long long)runSeed);

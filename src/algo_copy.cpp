@@ -60,8 +60,12 @@ void algo_copy(Run& R, const Params& P) {
                 Line l;
                 j.g->make(w.g + i, a, false, l);
                 io::store(a, l);
-                if (((i + 1) & 0xFFFF) == 0)
+                DDR5_INJECT(copy_fill_stop, R, tid, i);
+                if (((i + 1) & 0xFFFF) == 0) {
                     R.tick();
+                    if (R.stop.load(std::memory_order_relaxed))
+                        break; // the copy and verify below are skipped too: the data is only partly written
+                }
             }
             R.sync();
             for (u64 o = 0; o < nA && !R.stop; o += bl) {
@@ -92,8 +96,11 @@ void algo_copy(Run& R, const Params& P) {
                     R.vtick();
                     if (!io::verify(a, e, act))
                         R.report(tid, a, e, act, side ? "copy-dst" : "copy-src");
-                    if (((i + 1) & 0xFFFF) == 0)
+                    if (((i + 1) & 0xFFFF) == 0) {
                         R.tick();
+                        if (R.stop.load(std::memory_order_relaxed))
+                            break;
+                    }
                 }
             R.sync();
         }

@@ -201,13 +201,16 @@ void algo_pagemix(Run& R, const Params& P) {
         DDR5_INJECT(pagemix_flip, R, tid);
         if (tid == 0)
             R.set_label("page shuffle: final verify of all pages");
-        for (u64 pg = tid; pg < np; pg += R.layout.T) {
+        // Hard stop: Stop (or the first error in stop-on-error mode) ends this verify at the next page. Pages not yet
+        // compared are simply not checked, which can miss a fault but never invents one.
+        for (u64 pg = tid; pg < np && !R.stop.load(std::memory_order_relaxed); pg += R.layout.T) {
             if (!filled[pg])
                 continue;
             Gen g = gen(pp[pg]);
             pm_check<1>(R, tid, R.layout.region + pg * kPageBytes, g, pp[pg].inv, "pagemix-final");
             if (((pg / R.layout.T + 1) & 0x3FF) == 0)
                 R.tick();
+            DDR5_INJECT(pagemix_final_stop, R, tid, pg);
         }
         R.sync();
     });

@@ -146,6 +146,14 @@ void pagemix_fill_stop(Run& R, int tid, u64 pg) {
         R.stop = true;
 }
 
+// self-test only: with DDR5TEST_STOP_IN_COPY_FILL set, thread 0 raises stop early in the fill of every copy job; the
+// fill ends at its next stop poll with most of the window unwritten, and the copy and the verify must then be skipped
+// (the injected faults of copy_after_copy and the never-written lines would otherwise be reported).
+void copy_fill_stop(Run& R, int tid, u64 i) {
+    if (i == 1000 && tid == 0 && getenv("DDR5TEST_STOP_IN_COPY_FILL"))
+        R.stop = true;
+}
+
 // self-test only: one planted bit flip before the final verify of all pages
 void pagemix_flip(Run& R, int tid) {
     if (tid == 0) {
@@ -154,6 +162,23 @@ void pagemix_flip(Run& R, int tid) {
         _mm_mfence();
     }
     R.sync();
+}
+
+// self-test only: called by every thread after each page of the pagemix final verify. With DDR5TEST_FINAL_LATE_FLIP
+// set, thread 0 plants one bit flip in the LAST page once it has verified page 1000 (that page is reached late, so only
+// a final verify that runs to the end finds the flip); with DDR5TEST_STOP_IN_FINAL also set it then raises stop. The
+// selftest requires the flip to be found without the stop and NOT found with it (hard stop: the verify is cut short).
+void pagemix_final_stop(Run& R, int tid, u64 pg) {
+    static bool done = false; // only thread 0 touches it
+    if (tid != 0 || done || pg < 1000 || !getenv("DDR5TEST_FINAL_LATE_FLIP"))
+        return;
+    done = true;
+    u8* last = R.layout.region + (R.layout.regionBytes / kPageBytes - 1) * kPageBytes;
+    last[100] ^= 0x04;
+    _mm_clflush(last + 64);
+    _mm_mfence();
+    if (getenv("DDR5TEST_STOP_IN_FINAL"))
+        R.stop = true;
 }
 
 // self-test only: one lost/extra increment

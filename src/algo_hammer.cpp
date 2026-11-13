@@ -62,8 +62,11 @@ void algo_hammer(Run& R, const Params& P) {
                 Line l;
                 j.g->make(w.g + i, a, false, l);
                 io::store(a, l);
-                if (((i + 1) & 0xFFFF) == 0)
+                if (((i + 1) & 0xFFFF) == 0) {
                     R.tick();
+                    if (R.stop.load(std::memory_order_relaxed))
+                        break; // the rounds and the victim check below are skipped too: the data is only partly written
+                }
             }
             R.sync();
             u64 span = 2 * (j.A - 1) * j.sL + 1;
@@ -85,6 +88,8 @@ void algo_hammer(Run& R, const Params& P) {
                             _mm_clflush(a);
                         }
                         _mm_mfence();
+                        if ((it & 0x3FFF) == 0x3FFF && R.stop.load(std::memory_order_relaxed))
+                            break; // the aggressors are restored below; the victim check is skipped after a stop
                     }
                     for (size_t k = 0; k < ag.size(); k++) {
                         u64 i = (ag[k] - w.base) / kLineBytes;
