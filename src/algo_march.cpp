@@ -1,6 +1,7 @@
 // algo_march.cpp - user-defined march tests.
 #include "algo.h"
 #include "gen.h"
+#include "inject.h"
 #include "lineio.h"
 #include "log.h"
 #include "order.h"
@@ -231,6 +232,7 @@ void algo_march(Run& R, const Params& P) {
                     }
                     _mm_sfence();
                     R.sync();
+                    DDR5_INJECT(march_after_element, tid, ji, ei, w);
                 }
             });
         }

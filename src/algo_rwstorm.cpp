@@ -1,6 +1,7 @@
 // algo_rwstorm.cpp - concurrent read + write traffic on the same memory.
 #include "algo.h"
 #include "gen.h"
+#include "inject.h"
 #include "lineio.h"
 #include "log.h"
 #include "order.h"
@@ -95,6 +96,7 @@ void algo_rwstorm(Run& R, const Params& P) {
                 }
                 _mm_sfence();
                 R.sync();
+                DDR5_INJECT(rwstorm_before_final, tid, ji, w);
                 walk(R, of, false, rd(w)); // final check of own chunk
             });
             R.sync();

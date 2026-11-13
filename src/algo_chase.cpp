@@ -1,6 +1,7 @@
 // algo_chase.cpp - random pointer chase, K independent chains.
 #include "algo.h"
 #include "gen.h"
+#include "inject.h"
 #include "lineio.h"
 #include "log.h"
 #include "order.h"
@@ -68,6 +69,7 @@ void algo_chase(Run& R, const Params& P) {
                 _mm_sfence();
                 R.sync();
                 u64 steps = w.n / K;
+                DDR5_INJECT(chase_after_fill, tid, sd, K, w, o, steps);
                 std::vector<u64> p(K), bad(K, 0);
                 for (u64 k = 0; k < K; k++)
                     p[k] = o.at(k * steps);

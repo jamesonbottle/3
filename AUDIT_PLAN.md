@@ -52,6 +52,8 @@ Legend: `[ ]` open, `[x]` done, `[~]` dropped. Priority P0 (do first), P1, P2. V
 
 - **N1: CLFLUSH serialization dominates every default test (P0, measured on a VM only).** All tests inherit `flush=1` (`suite_data.cpp:54`) and flush every line with `_mm_clflush`. On this VM "Solid and checker" ran at 0.8 GB/s with CLFLUSH and 5.7 GB/s with CLFLUSHOPT. At flush=1 this also hides the audit's compute findings (pattern table sat at 0.8 GB/s, same as a plain pattern). See D1.
 - **N2: the audit's page-template count is off.** Pagemix needs 34 (pattern x width) combinations with nonzero weight, x2 for inverted = 68 templates (~272 KB), not ~136 x 4 KB. Harmless either way.
+- **N3 (found in A2): chase stops a chain at its first bad line.** `bad[k] = 1` in `algo_chase.cpp` skips the rest of that chain for the job, so lines after the first fault in a chain are never checked and a multi-fault chain reports one error. Detection is unaffected (the run still fails), but error counts for chase are a lower bound. The chase injection plants its two faults in different chains for this reason.
+- **N4 (found in A2): the rwstorm concurrent verify has no deterministic injection.** While the writer rewrites its chunk with identical data it heals any planted fault, and the partner's concurrent read finds it only by chance. The hook therefore sits before the final own-chunk check, which covers `rwstorm-read` in the final phase only. The rwstorm injection check is skipped under `SAN=thread` (writer and reader race by design, same as the clean runs).
 
 ## Plan by category
 
@@ -59,9 +61,9 @@ Legend: `[ ]` open, `[x]` done, `[~]` dropped. Priority P0 (do first), P1, P2. V
 
 - [ ] **A1 (P0, WIN)** Run `unit_tests` and the fault-injection checks on the MSVC build in CI.
   - Files: `build.bat` (builds only `ddr5ramtest` and `ddr5test_cli`), `.github/workflows/build.yml` (windows job), `CMakeLists.txt` (targets `unit_tests`, `ddr5test_cli_inject` and `add_test(unit_tests)` already exist on all platforms).
-  - Do: build both extra targets on windows-latest, run `ctest -R unit_tests`, port selftest section 3 (fill 42 lines / 44 bits, page shuffle, coherency, evolve 2 lines, stop-on-error exit 1) to a script the runner can run (Git Bash is normally on the runner; otherwise a PowerShell port). The injection hooks read env vars via `getenv`.
+  - Do: build both extra targets on windows-latest, run `ctest -R unit_tests`, port selftest section 3 (fill 42 lines / 44 bits, page shuffle, coherency, evolve 2 lines, march 3 lines / 5 bits, chase 2 lines, copy 3 lines / 4 bits, rwstorm 2 lines / 3 bits, stop-on-error exit 1) to a script the runner can run (Git Bash is normally on the runner; otherwise a PowerShell port). The injection hooks read env vars via `getenv`.
   - Done when: CI goes red if a planted fault is not reported by the MSVC build.
-- [ ] **A2 (P0)** Extend fault injection to march, chase, copy and rwstorm.
+- [x] **A2 (P0)** Extend fault injection to march, chase, copy and rwstorm. (Done 2026-11-13, see Session log and N3/N4.)
   - Files: `src/inject.cpp/.h` (existing hooks: `after_fill`, `evolve_last_pass`, `after_fill_throw`, `evolve_stop_in_write`, `pagemix_fill_stop`, `pagemix_flip`, `coherency_extra`), the four `algo_*.cpp`, `tools/selftest.sh` section 3.
   - Do: add a hook between write and verify in each algo (chase: flip a byte of a pointer line; copy: corrupt dst after the copy), add checks with exact expected counts.
   - Done when: each of the four has a "planted fault found" check, and temporarily disabling that algo's verify makes the check fail (mutation check). Land this before the D items so perf rewrites are protected.
@@ -179,3 +181,4 @@ Temporary patches used (scratch copy only, not committed): per-job timer `tc0` p
 | Date | Session | What was done |
 |---|---|---|
 | 2026-11-13 | Validation | Validated every audit claim against `f108410`, measured items D1/D2/D4/D6 on a Linux VM, wrote this plan. No source changes made. |
+| 2026-11-13 | Session 1: A2 | Baseline green (`unit_tests` pass, build 0 warnings). Added hooks `march_after_element`, `chase_after_fill`, `copy_after_copy`, `rwstorm_before_final` (`inject.cpp/.h`, four `algo_*.cpp`) and four exact-count checks in `selftest.sh` section 3 (march 3 lines / 5 bits, chase 2 lines / 2 bits, copy 3 lines / 4 bits, rwstorm 2 lines / 3 bits). Full `tools/selftest.sh`: 64 PASS, 0 FAIL, 0 SKIP (Linux VM, g++ 13). Mutation check on a scratch copy: disabling each algo's verify made its check fail (march, chase, copy, rwstorm; copy also with only the src or only the dst side off). New findings N3, N4. Next in Session 1: E1, G4, G6d, C4. |

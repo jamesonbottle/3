@@ -7,7 +7,8 @@
 #                      (printed as "run seed: 0x..."; a failure prints it so the run can be repeated with --seed); 2c checks the seed itself;
 #                      2e runs under taskset: the thread count and the pinning must follow the allowed CPUs
 #  3. fault injection  a build with -DDDR5TEST_INJECT plants known bit flips between write and verify (and, in the evolving-data test, a lost
-#                      write); the tester must report exactly those (exit code 1), and must not hang with --stop-on-error
+#                      write); the tester must report exactly those (exit code 1), and must not hang with --stop-on-error. Hooks exist for fill,
+#                      march, chase, copy, rwstorm, pagemix, evolve and coherency
 #
 # Sanitizer legs: SAN=address,undefined tools/selftest.sh   or   SAN=thread tools/selftest.sh   rebuild everything with -fsanitize=$SAN (-O1 -g)
 #  and run the same checks; any sanitizer report fails the run. SAN=thread runs a reduced set (TSan is 5-15x slower) and leaves out the
@@ -145,6 +146,23 @@ check "evolve: lost write shows as a whole stale line, the stray change as a sin
 log="$OUT/inj_evostop.log"; rm -f "$log"
 DDR5TEST_STOP_IN_EVOLVE=1 timeout $TMO "$OUT/cli_inject" $RUN -f "Evolving data" --log "$log" > "$OUT/inj_evostop.out" 2>&1; rc=$?
 check "evolve: stopped mid-rewrite reports no errors (lines the cut-short pass never reached are not verified)" '[ $rc -eq 0 ] && [ "$(grep -c "^ERROR" "$log" 2>/dev/null)" = "0" ] || { echo "    rc=$rc ERROR lines: $(grep -c "^ERROR" "$log" 2>/dev/null)"; grep "run seed" "$OUT/inj_evostop.out"; false; }'
+log="$OUT/inj_march.log"; rm -f "$log"
+timeout $TMO "$OUT/cli_inject" $RUN -f "Classic marches" --log "$log" > "$OUT/inj_march.out" 2>&1; rc=$?
+check "march: exit 1, exactly the 3 planted lines (5 bits) found by the read right after the write element" '[ $rc -eq 1 ] && [ "$(grep -c "^ERROR" "$log")" = "3" ] && [ "$(grep -c "march el1 r0" "$log")" = "3" ] && grep -q "3 bad lines, 5 bits" "$OUT/inj_march.out" || { echo "    rc=$rc ERROR lines: $(grep -c "^ERROR" "$log" 2>/dev/null)"; grep "run seed" "$OUT/inj_march.out"; false; }'
+log="$OUT/inj_chase.log"; rm -f "$log"
+timeout $TMO "$OUT/cli_inject" $RUN -f "Pointer chase" --log "$log" > "$OUT/inj_chase.out" 2>&1; rc=$?
+check "chase: exit 1, exactly the payload flip and the pointer flip (2 chains, 2 bits) found" '[ $rc -eq 1 ] && [ "$(grep -c "^ERROR" "$log")" = "2" ] && [ "$(grep -c " chase thr=0 " "$log")" = "2" ] && grep -q "2 bad lines, 2 bits" "$OUT/inj_chase.out" || { echo "    rc=$rc ERROR lines: $(grep -c "^ERROR" "$log" 2>/dev/null)"; grep "run seed" "$OUT/inj_chase.out"; false; }'
+log="$OUT/inj_copy.log"; rm -f "$log"
+timeout $TMO "$OUT/cli_inject" $RUN -f "Bulk copy" --log "$log" > "$OUT/inj_copy.out" 2>&1; rc=$?
+check "copy: exit 1, exactly 2 corrupted destination lines and 1 corrupted source line (4 bits) found" '[ $rc -eq 1 ] && [ "$(grep -c "^ERROR" "$log")" = "3" ] && [ "$(grep -c "copy-dst" "$log")" = "2" ] && [ "$(grep -c "copy-src" "$log")" = "1" ] && grep -q "3 bad lines, 4 bits" "$OUT/inj_copy.out" || { echo "    rc=$rc ERROR lines: $(grep -c "^ERROR" "$log" 2>/dev/null)"; grep "run seed" "$OUT/inj_copy.out"; false; }'
+log="$OUT/inj_rw.log"; rm -f "$log"
+# TSan exclusion, same reason as in the clean runs: the writer and its verifying partner race by design
+if [ "$SAN" = thread ]; then
+  echo "  SKIP  rwstorm injection (races by design, see the comment at the clean-run list)"
+else
+  timeout $TMO "$OUT/cli_inject" $RUN -f "Read/write storm, hash data" --log "$log" > "$OUT/inj_rw.out" 2>&1; rc=$?
+  check "rwstorm: exit 1, exactly the 2 planted lines (3 bits) found by the final check" '[ $rc -eq 1 ] && [ "$(grep -c "^ERROR" "$log")" = "2" ] && [ "$(grep -c "rwstorm-read" "$log")" = "2" ] && grep -q "2 bad lines, 3 bits" "$OUT/inj_rw.out" || { echo "    rc=$rc ERROR lines: $(grep -c "^ERROR" "$log" 2>/dev/null)"; grep "run seed" "$OUT/inj_rw.out"; false; }'
+fi
 log="$OUT/inj_throw.log"; rm -f "$log"
 DDR5TEST_THROW_IN_WORKER=1 timeout $TMO "$OUT/cli_inject" $RUN -f "Solid and checker" --fpu --log "$log" > "$OUT/inj_throw.out" 2>&1; rc=$?
 check "worker exception: exit 3 and 'internal error' logged (no terminate, no hang; --fpu threads joined)" '[ $rc -eq 3 ] && grep -q "internal error: injected worker failure" "$OUT/inj_throw.out" || { echo "    rc=$rc"; tail -5 "$OUT/inj_throw.out"; false; }'

@@ -1,6 +1,7 @@
 // algo_copy.cpp - bulk copy engines (memcpy, rep movsb, non-temporal copy).
 #include "algo.h"
 #include "gen.h"
+#include "inject.h"
 #include "lineio.h"
 #include "log.h"
 #include "order.h"
@@ -82,6 +83,7 @@ void algo_copy(Run& R, const Params& P) {
             }
             _mm_sfence();
             R.sync();
+            DDR5_INJECT(copy_after_copy, tid, ji, A, B, nA);
             for (int side = 0; side < 2 && !R.stop; side++)
                 for (u64 i = 0; i < nA; i++) {
                     const u8* a = (side ? B : A) + i * kLineBytes;

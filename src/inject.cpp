@@ -13,6 +13,14 @@
 
 namespace ddr5::inject {
 
+// XOR `mask` into byte `off` of line number `line` (counted from `base`) and push the line out of the cache, so the
+// corruption looks like a fault in DRAM
+static void flip(u8* base, u64 line, int off, u8 mask) {
+    u8* c = base + line * kLineBytes + off;
+    *c ^= mask;
+    _mm_clflush(c);
+}
+
 // self-test only: corrupt memory between write and verify (algo_fill, after the first sync)
 void after_fill(Run& R, int tid, size_t ji, const View& w) {
     if (tid == 0 && ji == 0) {
@@ -26,6 +34,53 @@ void after_fill(Run& R, int tid, size_t ji, const View& w) {
         _mm_mfence();
     }
     R.sync();
+}
+
+// self-test only (march, first variant, after its first element = the initial write): thread 0 corrupts three lines of
+// its window (1, 3 and 1 bits). The next element reads every line (r0) before it rewrites it, so each planted line is
+// reported exactly once, as "march el1 r0".
+void march_after_element(int tid, size_t ji, size_t ei, const View& w) {
+    if (tid == 0 && ji == 0 && ei == 0 && w.n > 8192) {
+        flip(w.base, 700, 8, 0x01);
+        flip(w.base, 701, 33, 0x15);
+        flip(w.base, 5000, 63, 0x80);
+        _mm_mfence();
+    }
+}
+
+// self-test only (chase, 32 chains of the first seed, after the lines are written): thread 0 corrupts two lines that
+// lie in DIFFERENT chains - a payload bit in chain 0 and bit 0 of the next-index word in chain 1. A chain stops at its
+// first bad line, so two faults in one chain would be reported once; in separate chains each is reported exactly once.
+void chase_after_fill(int tid, u64 sd, u64 K, const View& w, const Order& o, u64 steps) {
+    if (tid == 0 && sd == 0 && K == 32 && steps > 64) {
+        flip(w.base, o.at(steps / 2), 40, 0x10); // chain 0 covers order positions [0, steps)
+        flip(w.base, o.at(steps + 7), 0, 0x01);  // chain 1 covers [steps, 2 * steps)
+        _mm_mfence();
+    }
+}
+
+// self-test only (copy, first method, after the copy and before the verify): thread 0 corrupts two lines of the
+// destination (1 bit, and 2 bits in one line) and one line of the source (1 bit). Reported as "copy-dst" (2) and
+// "copy-src" (1).
+void copy_after_copy(int tid, size_t ji, u8* A, u8* B, u64 nA) {
+    if (tid == 0 && ji == 0 && nA > 100000) {
+        flip(B, 300, 12, 0x02);
+        flip(B, 90000, 5, 0x40);
+        flip(B, 90000, 50, 0x04);
+        flip(A, 12, 40, 0x08);
+        _mm_mfence();
+    }
+}
+
+// self-test only (rwstorm, first job, after the passes and before the final check of each thread's own chunk): thread 0
+// corrupts two lines of its chunk (2 bits and 1 bit). It must be here: during the passes the writer rewrites the whole
+// chunk, which heals anything planted earlier, and the partner's concurrent read would find it only by chance.
+void rwstorm_before_final(int tid, size_t ji, const View& w) {
+    if (tid == 0 && ji == 0 && w.n > 8192) {
+        flip(w.base, 640, 20, 0x05);
+        flip(w.base, 4097, 8, 0x01);
+        _mm_mfence();
+    }
 }
 
 // self-test only, last pass: (1) undo one rewrite = a lost write, (2) flip one bit in a line
