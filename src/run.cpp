@@ -50,12 +50,12 @@ void Run::report(int tid, const u8* addr, const Line& e, const Line& a, const ch
         none = -1;
         errors.firstErrRun.compare_exchange_strong(none, tnow - progress.tStart);
     }
-    {
-        u64 off = (u64)(addr - layout.region);
-        for (int b = 6; b < 48; b++)
-            if ((off >> b) & 1)
-                st.abit[b]++;
-    }
+    // byte offset of the line in the tested region: the virtual address changes from run to run, the offset does not
+    // (same seed, same size), so it is the part of the address that can be compared between runs
+    const u64 off = (u64)(addr - layout.region);
+    for (int b = 6; b < 48; b++)
+        if ((off >> b) & 1)
+            st.abit[b]++;
     const char* cls = reread ? "n/a" : "(logical check, not a memory line)";
     if (reread && nl < 20000) { // re-read from DRAM: separates read-path/signalling errors from stored errors
         _mm_clflush(addr);
@@ -86,10 +86,11 @@ void Run::report(int tid, const u8* addr, const Line& e, const Line& a, const ch
     errors.logged.fetch_add(1, std::memory_order_relaxed);
     std::string msg; // grows to fit: a long test name must not cost the qword lines that follow
     appendf(msg,
-            "ERROR t=%.1fs test=\"%s\" %s thr=%d addr=%p beats=0x%04X lanes=0x%08X bits=%llu "
+            "ERROR t=%.1fs test=\"%s\" %s thr=%d addr=%p off=0x%llX beats=0x%04X lanes=0x%08X bits=%llu "
             "x8-codewords[1b/2b/3-4b/5+b]=%d/%d/%d/%d %s\n",
-            tnow - progress.tStart, label.c_str(), phase, tid, (const void*)addr, beatmask, lanemask,
-            (unsigned long long)bits, (int)(perblk[0] == 1) + (perblk[1] == 1) + (perblk[2] == 1) + (perblk[3] == 1),
+            tnow - progress.tStart, label.c_str(), phase, tid, (const void*)addr, (unsigned long long)off, beatmask,
+            lanemask, (unsigned long long)bits,
+            (int)(perblk[0] == 1) + (perblk[1] == 1) + (perblk[2] == 1) + (perblk[3] == 1),
             (int)(perblk[0] == 2) + (perblk[1] == 2) + (perblk[2] == 2) + (perblk[3] == 2),
             (int)(perblk[0] >= 3 && perblk[0] <= 4) + (perblk[1] >= 3 && perblk[1] <= 4) +
                 (perblk[2] >= 3 && perblk[2] <= 4) + (perblk[3] >= 3 && perblk[3] <= 4),

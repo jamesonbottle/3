@@ -80,13 +80,18 @@ check "--seed 777 is echoed as 0x0000000000000309 (given)" 'grep -q "run seed: 0
 SEEDP="$(rs "$S1.out")"; timeout $TMO "$OUT/cli" -mb 2 -t 1 --no-large-pages -f "Bulk copy" --seed "$SEEDP" --log "$S2.log" > "$S2.out" 2>&1
 check "the printed seed is accepted back unchanged" '[ "$(rs "$S2.out")" = "$SEEDP" ] && grep -q "(given)" "$S2.out"'
 # End to end: the injected faults of the evolving-data test print hash data derived from the seed, so the data of the two errors (not their
-# timestamps or addresses) must be identical for the same seed and differ for another seed.
+# timestamps or addresses) must be identical for the same seed and differ for another seed. The virtual address differs from run to run, so the
+# error line also carries the byte offset in the region (off=0x...): that one must be identical for the same seed.
 for tag in A B C; do sv=777; [ $tag = C ] && sv=778
   timeout $TMO "$OUT/cli_inject" $RUN -f "Evolving data" --seed $sv --log "$OUT/rep$tag.log" > "$OUT/rep$tag.out" 2>&1
   grep "qword" "$OUT/rep$tag.log" | sort > "$OUT/rep$tag.data"
+  grep "^ERROR" "$OUT/rep$tag.log" | grep -o " off=0x[0-9A-F]* " | sort > "$OUT/rep$tag.off"
 done
 check "same seed -> identical data and fault lines (run reproduced)" '[ -s "$OUT/repA.data" ] && cmp -s "$OUT/repA.data" "$OUT/repB.data"'
 check "different seed -> different data" '! cmp -s "$OUT/repA.data" "$OUT/repC.data"'
+check "every ERROR line carries the region offset, one per error" '[ -s "$OUT/repA.off" ] && [ "$(wc -l < "$OUT/repA.off")" = "$(grep -c "^ERROR" "$OUT/repA.log")" ]'
+check "region offsets are line-aligned and inside the 64 MiB test region" '(while read -r o; do v=$((${o#off=})); [ $((v % 64)) -eq 0 ] && [ $v -lt $((64 * 1024 * 1024)) ] || exit 1; done < "$OUT/repA.off")'
+check "same seed -> identical region offsets (virtual addresses differ, offsets do not)" '[ -s "$OUT/repA.off" ] && cmp -s "$OUT/repA.off" "$OUT/repB.off"'
 
 echo "== 2d. log file that cannot be opened"
 timeout $TMO "$OUT/cli" $RUN -f "Bulk copy" --log /nonexistent/dir/x.log > "$OUT/logbad.out" 2>&1; rc=$?
