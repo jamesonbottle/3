@@ -304,9 +304,10 @@ struct SuiteDriver {
         for (int t = 0; t < R.layout.T; t++)
             R.layout.chunks.push_back({R.layout.region + (u64)t * per, per / kLineBytes, (u64)t * (per / kLineBytes)});
         R.parallel([&](int tid) { std::memset(R.layout.chunks[tid].base, 0, per); });
-        if (R.errors.logf)
-            fprintf(R.errors.logf, "---- ddr5test run, %.2f GiB, %d threads, seed 0x%016llX ----\n",
-                    total / 1073741824.0, R.layout.T, (unsigned long long)runSeed);
+        std::string hdr;
+        appendf(hdr, "---- ddr5test run, %.2f GiB, %d threads, seed 0x%016llX ----\n", total / 1073741824.0, R.layout.T,
+                (unsigned long long)runSeed);
+        R.write_error_log(hdr);
     }
 
     void run_tests() {
@@ -379,6 +380,9 @@ struct SuiteDriver {
                     R.progress.stopReason.empty() ? "" : "  - ", R.progress.stopReason.c_str());
         R.log.emitf("total coverage: %.1fx of the %.2f GiB tested region verified\n",
                     (double)R.progress.vtotal.load() / (double)total, total / 1073741824.0);
+        if (R.errors.logFailed)
+            R.log.emitf("WARNING: writing to the log file '%s' failed (see above): its error details are incomplete\n",
+                        cfg.logFile.c_str());
         if (!failedNames.empty()) {
             R.log.emitf("tests with errors:\n");
             for (auto& n : failedNames)

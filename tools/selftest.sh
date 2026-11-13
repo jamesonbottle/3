@@ -134,6 +134,17 @@ check "fill: exit code 1"                       '[ $rc -eq 1 ]'
 check "fill: exactly the 42 planted lines found" '[ "$(grep -c "^ERROR" "$log")" = "42" ]'
 check "fill: 44 flipped bits counted"            'grep -q "42 bad lines, 44 bits" "$OUT/inj_fill.out"'
 check "fill: single-bit and 3-bit faults both logged" 'grep -q "lanes=0x00000001 bits=1" "$log" && grep -Eq "bits=3 " "$log"'
+check "fill: no log-write warning when the log is healthy" '! grep -q "cannot write to the log file" "$OUT/inj_fill.out"'
+if [ -w /dev/full ]; then
+  # /dev/full opens fine and fails every flush with ENOSPC: the errors must still be counted, exit 1, and the failure must be said once
+  timeout $TMO "$OUT/cli_inject" $RUN -f "Solid and checker" --log /dev/full > "$OUT/inj_full.out" 2>&1; rc=$?
+  check "log on /dev/full: exit 1 and the same 42 lines / 44 bits counted" '[ $rc -eq 1 ] && grep -q "42 bad lines, 44 bits" "$OUT/inj_full.out" || { echo "    rc=$rc"; tail -5 "$OUT/inj_full.out"; false; }'
+  check "log on /dev/full: exactly one console warning, repeated in the final summary" '[ "$(grep -c "cannot write to the log file" "$OUT/inj_full.out")" = "1" ] && grep -q "writing to the log file .*/dev/full.* failed" "$OUT/inj_full.out"'
+  timeout $TMO "$OUT/cli" $RUN -f "Bulk copy" --log /dev/full > "$OUT/clean_full.out" 2>&1; rc=$?
+  check "log on /dev/full, clean run: warns once but still exits 0 (nothing was lost)" '[ $rc -eq 0 ] && [ "$(grep -c "cannot write to the log file" "$OUT/clean_full.out")" = "1" ] || { echo "    rc=$rc"; tail -5 "$OUT/clean_full.out"; false; }'
+else
+  echo "  SKIP  /dev/full not writable: log write failure checks"
+fi
 log="$OUT/inj_page.log"; rm -f "$log"
 timeout $TMO "$OUT/cli_inject" $RUN -f "Page shuffle" --log "$log" > "$OUT/inj_page.out" 2>&1; rc=$?
 check "page shuffle: exit 1, flip caught in final verify" '[ $rc -eq 1 ] && grep -q "pagemix-final" "$log"'

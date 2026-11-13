@@ -83,6 +83,7 @@ struct App {
     FILE* log = nullptr;
     std::string lastLine;
     int logWhere = 0; // 0 = next to the exe, 1 = %TEMP% (exe folder not writable), 2 = no log file could be opened
+    std::atomic<bool> logFailed{false}; // a write to the log file failed (disk full...): details are missing from it
     std::unordered_map<HWND, std::wstring> shown; // last text per control, to avoid flicker
     u64 totalMB = 0;
 } A;
@@ -231,6 +232,7 @@ void start_run() {
         A.log = _wfopen(exe_dir_file(L"ddr5ramtest.log").c_str(), L"a");
         A.lastLine.clear();
         A.logWhere = 0;
+        A.logFailed = false;
         if (!A.log) { // exe folder not writable (e.g. Program Files): fall back to the temp folder rather than losing
                       // the error details
             wchar_t tp[MAX_PATH + 1];
@@ -245,19 +247,20 @@ void start_run() {
         if (A.log) {
             SYSTEMTIME st;
             GetLocalTime(&st);
-            fprintf(A.log,
-                    "---- DDR5 RAM Test run %04d-%02d-%02d %02d:%02d:%02d  %llu MB, %d threads, cache=%d rng=%d set=%d "
-                    "fpu=%d stop-on-error=%d ----\n",
-                    st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond, (unsigned long long)s.megabytes,
-                    s.threads, (int)s.cacheMode, (int)s.rngMode, (int)s.suite, (int)s.stressFpu, (int)s.stopOnError);
+            if (fprintf(A.log,
+                        "---- DDR5 RAM Test run %04d-%02d-%02d %02d:%02d:%02d  %llu MB, %d threads, cache=%d rng=%d "
+                        "set=%d fpu=%d stop-on-error=%d ----\n",
+                        st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond, (unsigned long long)s.megabytes,
+                        s.threads, (int)s.cacheMode, (int)s.rngMode, (int)s.suite, (int)s.stressFpu,
+                        (int)s.stopOnError) < 0 ||
+                fflush(A.log) != 0)
+                A.logFailed = true;
         }
     }
     A.logger.sink = [](const std::string& t) {
         std::lock_guard<std::mutex> l(A.logMu);
-        if (A.log) {
-            fputs(t.c_str(), A.log);
-            fflush(A.log);
-        }
+        if (A.log && (fputs(t.c_str(), A.log) == EOF || fflush(A.log) != 0))
+            A.logFailed = true; // shown once, in the end text (on_run_done); the lines still reach the log pane
         size_t e = t.find_last_not_of("\r\n");
         if (e != std::string::npos) {
             size_t b = t.find_last_of('\n', e);
@@ -311,7 +314,8 @@ void on_run_done(int rc) {
     set_running_ui(false);
     refresh();
     if (A.run && A.run->error_count() > 0)
-        setText(A.hTest, A.stopRequested   ? L"Stopped (errors found)"
+        setText(A.hTest, A.logFailed       ? L"Errors found - the log file could not be written completely (disk full?)"
+                         : A.stopRequested ? L"Stopped (errors found)"
                          : A.logWhere == 0 ? L"Errors found - see ddr5ramtest.log"
                          : A.logWhere == 1 ? L"Errors found - log is in %TEMP%"
                                            : L"Errors found (no log file could be written)");

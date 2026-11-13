@@ -1,5 +1,6 @@
 // run.cpp - Run::report.
 #include "run.h"
+#include <cerrno>
 #include <cstring>
 #include "lineio.h"
 
@@ -101,9 +102,21 @@ void Run::report(int tid, const u8* addr, const Line& e, const Line& a, const ch
                     (unsigned long long)a.w[j], (unsigned long long)(e.w[j] ^ a.w[j]));
     log.print_clear();
     log.emit(msg);
-    if (errors.logf) {
-        fputs(msg.c_str(), errors.logf);
-        fflush(errors.logf);
+    write_error_log(msg);
+}
+
+void Run::write_error_log(const std::string& text) {
+    if (!errors.logf)
+        return;
+    errno = 0;
+    if (fputs(text.c_str(), errors.logf) != EOF && fflush(errors.logf) == 0)
+        return;
+    const int e = errno;
+    if (!errors.logFailed.exchange(true)) {
+        log.print_clear();
+        log.emitf("WARNING: cannot write to the log file (%s): error details may be missing from it; errors are still "
+                  "counted and reported here\n",
+                  e ? strerror(e) : "write error");
     }
 }
 

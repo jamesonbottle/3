@@ -98,6 +98,9 @@ struct ErrorSink {
     // (compare-exchange); run_suite resets firstErrTest between tests, when no worker is running.
     std::atomic<double> firstErrRun{-1}, firstErrTest{-1};
     std::atomic<u64> errTotal{0};
+    // set (once, with a console warning) when a write to errors.logf failed (disk full, device gone): the details of
+    // some errors are then missing from the log file, but they are still counted and shown on the console
+    std::atomic<bool> logFailed{false};
 };
 
 struct Run;
@@ -188,6 +191,9 @@ struct Run {
     template <class F>
     void parallel(F fn);
     void report(int tid, const u8* addr, const Line& e, const Line& a, const char* phase, bool reread = true);
+    // Appends to errors.logf (CLI; no-op without one) and flushes. A failed write sets errors.logFailed and prints ONE
+    // console warning; later failures stay quiet. Callers hold errors.mu, or run when no worker is active.
+    void write_error_log(const std::string& text);
 
     // ---- front-end: follow a run from another thread
     struct Status {
