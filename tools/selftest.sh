@@ -8,7 +8,8 @@
 #                      2e runs under taskset: the thread count and the pinning must follow the allowed CPUs
 #  3. fault injection  a build with -DDDR5TEST_INJECT plants known bit flips between write and verify (and, in the evolving-data test, a lost
 #                      write); the tester must report exactly those (exit code 1), and must not hang with --stop-on-error. Hooks exist for fill,
-#                      march, chase, copy, rwstorm, pagemix, evolve and coherency
+#                      march, chase, copy, rwstorm, pagemix, evolve and coherency. One more hook breaks the barrier protocol on purpose (an extra
+#                      sync() on one worker) and the debug check (DDR5_CHECK_SYNC, on in every leg of this script) must catch it
 #
 # Sanitizer legs: SAN=address,undefined tools/selftest.sh   or   SAN=thread tools/selftest.sh   rebuild everything with -fsanitize=$SAN (-O1 -g)
 #  and run the same checks; any sanitizer report fails the run. SAN=thread runs a reduced set (TSan is 5-15x slower) and leaves out the
@@ -36,7 +37,9 @@ check() { if eval "$2"; then ok "$1"; else bad "$1"; fi; }
 
 echo "== build ($CXX, CMake) -> $OUT"
 # unit_tests, ddr5test_cli (normal engine) and ddr5test_cli_inject (same sources compiled with -DDDR5TEST_INJECT), built by CMake with -Wall -Wextra.
-cmake -S . -B "$OUT/cmake" -DCMAKE_CXX_COMPILER="$CXX" -DDDR5_OUTPUT_DIR="$OUT" -DDDR5_SANITIZE="$SAN" > "$OUT/cmake.log" 2>&1 || { cat "$OUT/cmake.log"; exit 2; }
+# -DDDR5_CHECK_SYNC=ON: every worker counts its Run::sync() calls and parallel() aborts if an unstopped run ends with different counts (run.h,
+# "Barrier protocol"). It is on in every leg, release flags included, so all clean runs, injection runs and SIGINT runs below also test it.
+cmake -S . -B "$OUT/cmake" -DCMAKE_CXX_COMPILER="$CXX" -DDDR5_OUTPUT_DIR="$OUT" -DDDR5_SANITIZE="$SAN" -DDDR5_CHECK_SYNC=ON > "$OUT/cmake.log" 2>&1 || { cat "$OUT/cmake.log"; exit 2; }
 cmake --build "$OUT/cmake" --target unit_tests ddr5test_cli ddr5test_cli_inject -j "$(nproc 2>/dev/null || echo 2)" > "$OUT/build.log" 2>&1 || { cat "$OUT/build.log"; exit 2; }
 grep -E "error|warning" "$OUT/build.log" && fail=1
 mv -f "$OUT/ddr5test_cli" "$OUT/cli"; mv -f "$OUT/ddr5test_cli_inject" "$OUT/cli_inject"
@@ -196,6 +199,13 @@ check "worker exception: exit 3 and 'internal error' logged (no terminate, no ha
 log="$OUT/inj_stop.log"; rm -f "$log"
 timeout $TMO "$OUT/cli_inject" $RUN -f "Solid and checker" --stop-on-error --log "$log" > "$OUT/inj_stop.out" 2>&1; rc=$?
 check "stop-on-error: exit 1 and no hang (barrier shutdown)" '[ $rc -eq 1 ]'
+# Barrier protocol (G1): worker 0 makes one sync() call more than worker 1 in a run that is never stopped. The debug check must end the run with
+# the message and death by signal (SIGABRT, rc >= 128): exit 1 would not do, because the planted fill faults give exit 1 anyway, and 124 is a hang.
+# Without the variable the same build runs normally
+# (the fill check above), so the abort comes from the check and not from the hook.
+log="$OUT/inj_sync.log"; rm -f "$log"
+DDR5TEST_EXTRA_SYNC=1 timeout $TMO "$OUT/cli_inject" $RUN -f "Solid and checker" --log "$log" > "$OUT/inj_sync.out" 2>&1; rc=$?
+check "barrier protocol: an extra sync() on one worker is caught (abort with the worker numbers, no hang, no pass)" '[ $rc -ge 128 ] && grep -q "barrier protocol violated in .*: worker 1 made [0-9]* sync() calls, worker 0 made [0-9]*" "$OUT/inj_sync.out" || { echo "    rc=$rc"; tail -4 "$OUT/inj_sync.out"; false; }'
 
 echo "== 4. stop: SIGINT at several moments in every test; the run must end within STOPWAIT seconds, exit 0, report no error"
 # The first Ctrl-C is the stop request (the CLI ends the current step and prints the summary). Every test runs alone on 128 MiB, so the

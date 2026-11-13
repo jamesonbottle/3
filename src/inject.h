@@ -26,6 +26,7 @@ void rwstorm_read_fault(int tid, size_t ji, u64 i, Line& e);
 void evolve_last_pass(Run& R, int tid, size_t ji, const View& w, u64 p, u64 passes, u64 seed, u64 maxp, StoreFn store);
 void evolve_stop_in_write(Run& R, int tid, u64 p);
 void after_fill_throw(int tid);
+void extra_sync(Run& R, int tid);
 void pagemix_fill_stop(Run& R, int tid, u64 pg);
 void pagemix_flip(Run& R, int tid);
 void pagemix_final_stop(Run& R, int tid, u64 pg);

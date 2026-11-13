@@ -907,6 +907,50 @@ static void test_exceptions() {
     }
 }
 
+// Barrier protocol (G1, see run.h): the helper that compares the workers' sync() counts, and parallel() itself in the
+// two situations the debug check (DDR5_CHECK_SYNC) must tell apart. A run whose workers all make the same calls must
+// pass; a run that is stopped may let workers leave at different points and must NOT be reported. The violation itself
+// ends in std::abort, so it cannot be tested here: selftest.sh does it with the DDR5TEST_EXTRA_SYNC hook.
+static void test_sync_protocol() {
+    CHECK(sync_count_mismatch({}) == -1 && sync_count_mismatch({7}) == -1 && sync_count_mismatch({3, 3, 3}) == -1,
+          "equal counts (or no workers) are no mismatch");
+    CHECK(sync_count_mismatch({3, 3, 4}) == 2 && sync_count_mismatch({3, 2, 3}) == 1 &&
+              sync_count_mismatch({0, 1}) == 1,
+          "the first worker that differs from worker 0 is reported");
+    Logger lg;
+    lg.sink = [](const std::string&) {
+    };
+    { // every worker makes the same 5 calls: nothing to report, and the barrier must not hang
+        Run R(lg);
+        R.layout.T = 3;
+        std::atomic<int> done{0};
+        R.parallel([&](int) {
+            for (int i = 0; i < 5; i++)
+                R.sync();
+            done++;
+        });
+        CHECK(done == 3 && !R.stop.load(), "an unstopped run with equal sync counts must just finish (%d done)",
+              done.load());
+    }
+    { // worker 0 stops the run and leaves at once; the others still make two sync() calls. Rule 2: allowed, not
+      // reported
+        Run R(lg);
+        R.layout.T = 3;
+        std::atomic<int> passed{0};
+        R.parallel([&](int tid) {
+            if (tid == 0) {
+                R.stop = true;
+                return;
+            }
+            R.sync();
+            R.sync();
+            passed++;
+        });
+        CHECK(passed == 2 && R.stop.load(),
+              "workers of a stopped run may make different numbers of sync() calls (%d passed)", passed.load());
+    }
+}
+
 // Run lifecycle seen from the front-end side: status() may be polled from another thread while run_suite works (the GUI
 // does exactly this; run it under TSan, see S12), and a Stop that arrives before the run starts must not be lost.
 static void test_run_status() {
@@ -1067,6 +1111,7 @@ int main() {
     test_values();
     test_run_status();
     test_exceptions();
+    test_sync_protocol();
     test_report();
     test_fill_opts();
     test_march_opts();

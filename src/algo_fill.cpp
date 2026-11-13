@@ -124,6 +124,7 @@ void algo_fill(Run& R, const Params& P) {
             });
             R.sync();
         }
+        DDR5_INJECT(extra_sync, R, tid);
     });
 }
 

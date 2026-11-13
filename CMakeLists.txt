@@ -14,6 +14,9 @@ project(ddr5ramtest CXX)
 set(DDR5_OUTPUT_DIR "${CMAKE_SOURCE_DIR}/build" CACHE PATH "Where the executables are placed")
 # Sanitizers for every target (GCC / Clang): thread, or address,undefined. Set by `SAN=... tools/selftest.sh`; empty = normal build.
 set(DDR5_SANITIZE "" CACHE STRING "Value for -fsanitize= (thread | address,undefined); empty for none")
+# Debug check of the barrier protocol (every worker must make the same number of Run::sync() calls; see run.h). Always on in
+# builds without NDEBUG; tools/selftest.sh turns it on in every leg, release flags included. Off by default.
+option(DDR5_CHECK_SYNC "Check that all workers make the same number of sync() calls" OFF)
 # MSVC only: treat warnings as errors (off by default; CI turns it on once /W4 is clean).
 option(DDR5_WARNINGS_AS_ERRORS "Build with /WX on MSVC" OFF)
 
@@ -27,6 +30,9 @@ endif()
 
 # One place for the compiler flags every target shares (engine, front-ends, tests).
 add_library(ddr5_flags INTERFACE)
+if(DDR5_CHECK_SYNC)
+  target_compile_definitions(ddr5_flags INTERFACE DDR5_CHECK_SYNC=1)
+endif()
 if(MSVC)
   target_compile_options(ddr5_flags INTERFACE /O2 /arch:AVX2 /EHsc /utf-8 /W4)
   if(DDR5_WARNINGS_AS_ERRORS)

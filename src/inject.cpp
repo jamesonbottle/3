@@ -131,6 +131,15 @@ void after_fill_throw(int tid) {
         throw std::runtime_error("injected worker failure");
 }
 
+// self-test only (algo_fill, after the last job): with DDR5TEST_EXTRA_SYNC set, worker 0 makes ONE sync() call more
+// than the others, which breaks rule 1 of the barrier protocol (run.h). It cannot hang: every other worker has already
+// passed its last sync, and a worker that returns is dropped from the barrier, so the extra wait ends as soon as they
+// have left. The debug check (DDR5_CHECK_SYNC) must catch it when parallel() ends, and abort with a message.
+void extra_sync(Run& R, int tid) {
+    if (tid == 0 && getenv("DDR5TEST_EXTRA_SYNC"))
+        R.sync();
+}
+
 // self-test only: with DDR5TEST_STOP_IN_EVOLVE set, raise stop at the start of rewrite pass 2, so walk() cuts that
 // pass short (it polls stop every 65,536 lines) and many lines that were due a rewrite keep their previous generation.
 // The verify that follows must then be skipped; otherwise it reports those healthy lines as errors.

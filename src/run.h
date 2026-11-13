@@ -6,6 +6,7 @@
 #include <barrier>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <map>
 #include <mutex>
 #include <string>
@@ -65,6 +66,26 @@ struct Stats {
 };
 inline thread_local u64 t_vcount =
     0; // lines this thread has verified since its last flush into Progress::vbytes / vtotal
+
+// Debug check of the barrier protocol (see "Barrier protocol" above struct Run). It is on in builds with asserts (no
+// NDEBUG) and wherever the build defines DDR5_CHECK_SYNC (tools/selftest.sh does, in every leg, through the CMake
+// option of the same name); a release build has none of it. The macro must be the same in every translation unit,
+// because Run::sync() and Run::parallel() are inline: set it only through the CMake option (ddr5_flags).
+#if !defined(DDR5_CHECK_SYNC) && !defined(NDEBUG)
+#define DDR5_CHECK_SYNC 1
+#endif
+#ifdef DDR5_CHECK_SYNC
+inline thread_local u64 t_syncs = 0; // sync() calls this worker thread has made in the parallel() in progress
+#endif
+
+// Index of the first worker whose sync() count differs from worker 0's, or -1 if all are equal (or there are none).
+// Always compiled so that the unit tests can call it in any build.
+inline int sync_count_mismatch(const std::vector<u64>& counts) {
+    for (size_t i = 1; i < counts.size(); i++)
+        if (counts[i] != counts[0])
+            return (int)i;
+    return -1;
+}
 
 // Where the tested memory is and how it is split between the worker threads. run_suite fills it in before the first
 // test starts; the algos only read it.
@@ -126,6 +147,27 @@ int run_suite(const Settings& s, Run& R); // suite.h: the one function besides R
 //  - report() is called by the worker threads; under errors.mu it updates the error counters, the "first error" times
 //    and errors.logf. parallel() sets `bar` for its duration and joins every worker before it returns.
 //  - A Run is neither copyable nor movable: the workers, the barrier and the front-end all hold its address.
+//
+// Barrier protocol. sync() waits on one std::barrier that parallel() creates for its T workers; the barrier has no
+// notion of WHICH sync() a worker is at, it only counts arrivals. That is why the following rules matter:
+//  1. Same sequence. While `stop` is false, every worker makes exactly the same sequence of sync() calls for a job. How
+//     many calls there are may depend on the job (its phases, its dwell time), never on the thread id or on anything
+//     one worker decides alone. A decision that all workers must share is made by ONE worker, published, and read after
+//     a sync() (coherency: tid 0 sets `fin`, the others read it after the next barrier).
+//  2. Leaving. A worker leaves only by returning from its fn(t); parallel() then calls arrive_and_drop(), which counts
+//  as
+//     its arrival for the phase the others are waiting in and takes it out of every later phase, so nobody waits for a
+//     worker that has gone (an exception, a failed thread start and a Stop all end this way). Once `stop` is set the
+//     workers may therefore leave at different points (the check at the top of a job is read by each worker alone) and
+//     make different numbers of sync() calls: that is allowed, and stop is never cleared, so it stays true.
+//  3. No false errors after stop. A walk() that stop cuts short leaves data half written. Every worker must re-read
+//     `stop` AFTER the barrier that follows such a walk and before it verifies that data (evolve: `if (R.stop) break;`
+//     after the sync). Stop is monotonic, so if any worker saw it while writing, every worker sees it after the barrier
+//     and skips the verify; skipping a check can miss a fault but never invents one.
+//  4. Polling. walk() looks at `stop` every 65,536 lines; the other long loops poll at their own interval, so a Stop
+//     takes effect within about a window of work, not at the end of the job.
+// Debug check (DDR5_CHECK_SYNC): each worker counts its sync() calls; when parallel() ends and stop was never set, the
+// counts must be equal, otherwise it prints which worker differed and aborts (rule 1; selftest: DDR5TEST_EXTRA_SYNC).
 struct Run {
     // ---- algo-facing: data (read-only for the algos)
     const Logger& log; // where output goes; owned by the front-end, must outlive the Run
@@ -147,7 +189,12 @@ struct Run {
         if (++t_vcount >= kTickLines)
             vflush();
     }
-    void sync() { bar->arrive_and_wait(); }
+    void sync() {
+#ifdef DDR5_CHECK_SYNC
+        t_syncs++;
+#endif
+        bar->arrive_and_wait();
+    }
     void set_label(const std::string& s) {
         std::lock_guard<std::mutex> l(errors.mu);
         label = s;
@@ -261,12 +308,18 @@ void Run::parallel(F fn) {
         aborted = true;
         stop = true;
     };
+#ifdef DDR5_CHECK_SYNC
+    std::vector<u64> syncs((size_t)layout.T, 0); // per worker: its sync() calls, stored when the worker ends
+#endif
     std::vector<std::thread> th;
     int started = 0;
     try {
         th.reserve((size_t)layout.T);
         for (int t = 0; t < layout.T; t++) {
             th.emplace_back([&, t] {
+#ifdef DDR5_CHECK_SYNC
+                t_syncs = 0;
+#endif
                 try {
                     if (!plat::pin(t))
                         unpinned++; // not fatal: the test is still valid, the thread just may migrate between cores
@@ -274,6 +327,9 @@ void Run::parallel(F fn) {
                 } catch (...) {
                     fail();
                 }
+#ifdef DDR5_CHECK_SYNC
+                syncs[(size_t)t] = t_syncs;
+#endif
                 vflush();
                 b.arrive_and_drop();
                 running--;
@@ -336,6 +392,21 @@ void Run::parallel(F fn) {
     for (auto& x : th)
         x.join();
     bar = nullptr;
+#ifdef DDR5_CHECK_SYNC
+    // Rule 1 of the barrier protocol. Skipped once stop is set (workers may then leave at different points, rule 2) or
+    // a worker failed; stop is never cleared, so "stop is false here" means it was false during the whole call.
+    if (!failure && !stop.load()) {
+        int bad = sync_count_mismatch(syncs);
+        if (bad >= 0) {
+            fprintf(stderr,
+                    "internal error: barrier protocol violated in '%s': worker %d made %llu sync() calls, worker 0 "
+                    "made %llu\n",
+                    testName.c_str(), bad, (unsigned long long)syncs[(size_t)bad], (unsigned long long)syncs[0]);
+            fflush(stderr);
+            std::abort();
+        }
+    }
+#endif
     log.print_clear();
     if (unpinned.load() > 0 && !pinWarned) { // all workers are joined here, so logging needs no lock
         pinWarned = true;
