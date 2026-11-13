@@ -42,19 +42,48 @@ static void emit_skew(const char* prefix, const Stats& s, u64 regionBytes, const
 // Keeps the FPU loop from being optimised away. Every FPU thread adds to it, so it is atomic (relaxed: only the
 // side effect matters, a lost update is harmless); a plain or volatile global would be a data race between threads.
 static std::atomic<float> g_fpu_sink{0};
-static void fpu_stress(std::atomic<bool>& stop) {
-    plat::lower_priority();
+
+void FpuKernel::reseed() {
+    for (int i = 0; i < 8; i++)
+        for (int l = 0; l < 8; l++)
+            v[i][l] = 1.0f + 0.01f * (float)i;
+    loops = 0;
+}
+void FpuKernel::run(unsigned outer) {
     __m256 x[8];
     for (int i = 0; i < 8; i++)
-        x[i] = _mm256_set1_ps(1.0f + 0.01f * (float)i);
+        x[i] = _mm256_loadu_ps(v[i]);
     const __m256 m = _mm256_set1_ps(1.0000001f), k = _mm256_set1_ps(0.0000001f);
-    while (!stop.load(std::memory_order_relaxed)) {
-        for (int it = 0; it < 20000; it++)
+    for (unsigned o = 0; o < outer; o++) {
+        for (int it = 0; it < kFpuInner; it++)
             for (int i = 0; i < 8; i++)
                 x[i] = _mm256_add_ps(_mm256_mul_ps(x[i], m), k);
-        float t[8];
-        _mm256_storeu_ps(t, x[0]);
-        g_fpu_sink.store(g_fpu_sink.load(std::memory_order_relaxed) + t[0], std::memory_order_relaxed);
+        if (++loops >= kFpuReseedLoops) { // renormalise before the values can overflow (see suite.h)
+            loops = 0;
+            for (int i = 0; i < 8; i++)
+                x[i] = _mm256_set1_ps(1.0f + 0.01f * (float)i);
+        }
+    }
+    for (int i = 0; i < 8; i++)
+        _mm256_storeu_ps(v[i], x[i]);
+}
+float FpuKernel::sink() const {
+    float s = 0;
+    for (int i = 0; i < 8; i++)
+        s += v[i][0];
+    return s;
+}
+
+// Priority and pinning (decided 2026-11-13, D6): the FPU threads are NOT pinned and keep the platform's lowest
+// normal priority (Windows: below normal; POSIX: lower_priority() does nothing). Pinning them to the cores of the
+// memory workers would make them compete with the very threads that do the test; unpinned and at low priority they take
+// the time the workers leave free (barriers, waits, SMT siblings) and the scheduler moves them away from a busy worker.
+static void fpu_stress(std::atomic<bool>& stop) {
+    plat::lower_priority();
+    FpuKernel K;
+    while (!stop.load(std::memory_order_relaxed)) {
+        K.run(1); // one outer loop = kFpuInner steps of all eight registers, then the stop flag is looked at again
+        g_fpu_sink.store(g_fpu_sink.load(std::memory_order_relaxed) + K.sink(), std::memory_order_relaxed);
     }
 }
 

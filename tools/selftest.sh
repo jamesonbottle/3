@@ -66,6 +66,7 @@ done
 check "valid option values still accepted" 'timeout $TMO "$OUT/cli" -mb 64 -t 2 --cache bypass --rng murmur --minutes 0.5 --coverage 100 --list > /dev/null 2>&1'
 check "seed accepted as decimal, hex, 0 and the 64-bit maximum" 'for sv in 12345 0xDEADBEEF 0 18446744073709551615 0xFFFFFFFFFFFFFFFF; do timeout $TMO "$OUT/cli" --seed $sv --list > /dev/null 2>&1 || exit 1; done'
 check "xorshift RNG option runs clean (hash tests with the new final mix)" 'timeout $TMO "$OUT/cli" $RUN --rng xorshift -f "Random-order hash soak" --log "$OUT/xs.log" > "$OUT/xs.out" 2>&1; rc=$?; [ $rc -eq 0 ] && ! grep -q "^ERROR" "$OUT/xs.log" 2>/dev/null || { grep "run seed" "$OUT/xs.out"; false; }'
+check "--fpu: FPU stress threads next to a memory test cause no false error, and the run ends (exit 0, threads joined)" 'timeout $TMO "$OUT/cli" $RUN --fpu -f "Solid and checker" --log "$OUT/fpu.log" > "$OUT/fpu.out" 2>&1; rc=$?; [ $rc -eq 0 ] && ! grep -q "^ERROR" "$OUT/fpu.log" 2>/dev/null || { echo "    rc=$rc"; grep "run seed" "$OUT/fpu.out"; tail -4 "$OUT/fpu.out"; false; }'
 log="$OUT/cov.log"; rm -f "$log"
 timeout $TMO "$OUT/cli" -mb 2 -t 1 --no-large-pages -f "Bulk copy" --log "$log" > "$OUT/cov.out" 2>&1
 check "coverage counter exact on a 2 MB region (3 full verifies = 3.0x)" 'grep -q "coverage this test 3.0x" "$OUT/cov.out" || { grep coverage "$OUT/cov.out"; false; }'

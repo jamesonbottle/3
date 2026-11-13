@@ -951,6 +951,45 @@ static void test_sync_protocol() {
     }
 }
 
+// FPU stress kernel (D6). Left alone, x = x * m + k grows by ~1.2e-7 per step and a register reaches +inf after ~8e8
+// steps
+// (~40,100 outer loops), after which it never changes again. The kernel re-seeds the registers every kFpuReseedLoops
+// outer loops, so the whole run is periodic: if two and a half periods stay finite, bounded and changing on EVERY outer
+// loop, and the state is back at the start after each full period, an unbounded run does too (a fast proof; running
+// past 40,100 loops would take seconds).
+static void test_fpu_kernel() {
+    FpuKernel K;
+    float start[8][8], prev[8][8];
+    memcpy(start, K.v, sizeof start);
+    bool finite = true, changing = true, periodic = true;
+    float maxv = 0;
+    for (u64 n = 1; n <= 2 * kFpuReseedLoops + kFpuReseedLoops / 2; n++) {
+        memcpy(prev, K.v, sizeof prev);
+        K.run(1);
+        for (int i = 0; i < 8; i++) {
+            if (K.v[i][0] == prev[i][0])
+                changing = false; // register i did not change in a whole outer loop
+            for (int l = 0; l < 8; l++) {
+                if (!std::isfinite(K.v[i][l]))
+                    finite = false;
+                maxv = std::max(maxv, std::fabs(K.v[i][l]));
+            }
+        }
+        if (n % kFpuReseedLoops == 0 && memcmp(K.v, start, sizeof start) != 0)
+            periodic = false;
+    }
+    CHECK(finite, "an FPU register left the finite range");
+    CHECK(changing, "an FPU register stopped changing");
+    CHECK(maxv < 100.0f, "FPU values must stay small (max %g)", (double)maxv);
+    CHECK(periodic, "the kernel must be back at its start state after kFpuReseedLoops outer loops");
+    CHECK(std::isfinite(K.sink()) && K.sink() > 0.0f, "FpuKernel::sink() must be a finite positive number");
+    FpuKernel A, B; // run(a) + run(b) is the same as run(a + b): the state really is carried in v
+    A.run(7);
+    B.run(3);
+    B.run(4);
+    CHECK(memcmp(A.v, B.v, sizeof A.v) == 0 && A.loops == B.loops, "run() must carry its state between calls");
+}
+
 // Run lifecycle seen from the front-end side: status() may be polled from another thread while run_suite works (the GUI
 // does exactly this; run it under TSan, see S12), and a Stop that arrives before the run starts must not be lost.
 static void test_run_status() {
@@ -1112,6 +1151,7 @@ int main() {
     test_run_status();
     test_exceptions();
     test_sync_protocol();
+    test_fpu_kernel();
     test_report();
     test_fill_opts();
     test_march_opts();
