@@ -2,6 +2,7 @@
 // suite.h - run settings and the run_suite() entry point used by both front-ends.
 #include <string>
 #include <vector>
+#include "flush.h"
 #include "params.h"
 #include "run.h"
 #include "seed.h"
@@ -27,6 +28,8 @@ struct Settings {
     int threads = 0;         // 0 = all logical CPUs
     bool stopOnError = true; // beeping is done by the front-end
     CacheMode cacheMode = CacheMode::Default;
+    FlushMode flushMode =
+        FlushMode::Auto;        // how 'flush' accesses evict lines: CLFLUSHOPT when available, or force CLFLUSH
     Rng rngMode = Rng::Default; // hash mixer for 'hash' data; Default = SplitMix
     bool stressFpu = false;     // extra FPU/AVX load threads (more current draw while testing memory)
     bool largePages = true;

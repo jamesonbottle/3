@@ -83,7 +83,7 @@ void algo_chase(Run& R, const Params& P) {
                         Line act, e;
                         CBAR();
                         IO<32, 0, 0>::load(a, act);
-                        _mm_clflush(a);
+                        flush_line(a);
                         CBAR();
                         make(p[k], act.w[0], e);
                         R.vtick();

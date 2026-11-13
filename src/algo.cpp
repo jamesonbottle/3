@@ -44,7 +44,7 @@ void disturb_traffic(Run& R, const View& d, int mode, u64 passes, u64 seed) {
             if (mode != 1) {
                 Line t;
                 IO<32, 0, 0>::load(a, t);
-                _mm_clflush(a);
+                flush_line(a);
                 acc ^= t.w[0];
             }
             if (mode >= 1) {

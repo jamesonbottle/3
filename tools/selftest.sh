@@ -60,10 +60,10 @@ for f in "Address-in-address" "Solid and checker" "Stressapptest-style patterns"
 done
 
 echo "== 2b. option checking and coverage counter"
-for bad in "-mb abc" "-t abc" "-l x" "--minutes abc" "--coverage -5" "--cache bogus" "--rng bogus" "-mb" "--seed abc" "--seed -1" "--seed +5" "--seed 0x" "--seed 0xZZ" "--seed 18446744073709551616" "--seed"; do
+for bad in "-mb abc" "-t abc" "-l x" "--minutes abc" "--coverage -5" "--cache bogus" "--flush bogus" "--rng bogus" "-mb" "--seed abc" "--seed -1" "--seed +5" "--seed 0x" "--seed 0xZZ" "--seed 18446744073709551616" "--seed"; do
   check "bad option rejected with exit 2: $bad" 'timeout $TMO "$OUT/cli" $bad --list > /dev/null 2>&1; [ $? -eq 2 ]'
 done
-check "valid option values still accepted" 'timeout $TMO "$OUT/cli" -mb 64 -t 2 --cache bypass --rng murmur --minutes 0.5 --coverage 100 --list > /dev/null 2>&1'
+check "valid option values still accepted" 'timeout $TMO "$OUT/cli" -mb 64 -t 2 --cache bypass --flush clflush --rng murmur --minutes 0.5 --coverage 100 --list > /dev/null 2>&1'
 check "seed accepted as decimal, hex, 0 and the 64-bit maximum" 'for sv in 12345 0xDEADBEEF 0 18446744073709551615 0xFFFFFFFFFFFFFFFF; do timeout $TMO "$OUT/cli" --seed $sv --list > /dev/null 2>&1 || exit 1; done'
 check "xorshift RNG option runs clean (hash tests with the new final mix)" 'timeout $TMO "$OUT/cli" $RUN --rng xorshift -f "Random-order hash soak" --log "$OUT/xs.log" > "$OUT/xs.out" 2>&1; rc=$?; [ $rc -eq 0 ] && ! grep -q "^ERROR" "$OUT/xs.log" 2>/dev/null || { grep "run seed" "$OUT/xs.out"; false; }'
 check "--fpu: FPU stress threads next to a memory test cause no false error, and the run ends (exit 0, threads joined)" 'timeout $TMO "$OUT/cli" $RUN --fpu -f "Solid and checker" --log "$OUT/fpu.log" > "$OUT/fpu.out" 2>&1; rc=$?; [ $rc -eq 0 ] && ! grep -q "^ERROR" "$OUT/fpu.log" 2>/dev/null || { echo "    rc=$rc"; grep "run seed" "$OUT/fpu.out"; tail -4 "$OUT/fpu.out"; false; }'
@@ -148,6 +148,19 @@ if [ -w /dev/full ]; then
   check "log on /dev/full, clean run: warns once but still exits 0 (nothing was lost)" '[ $rc -eq 0 ] && [ "$(grep -c "cannot write to the log file" "$OUT/clean_full.out")" = "1" ] || { echo "    rc=$rc"; tail -5 "$OUT/clean_full.out"; false; }'
 else
   echo "  SKIP  /dev/full not writable: log write failure checks"
+fi
+# CLFLUSHOPT (D1): the flush instruction is chosen at run time and named in the banner; every mode must find the same planted faults.
+if grep -qw clflushopt /proc/cpuinfo 2>/dev/null; then HAVE_OPT=1; else HAVE_OPT=0; fi
+for fm in auto clflush clflushopt; do
+  log="$OUT/inj_fl_$fm.log"; rm -f "$log"
+  timeout $TMO "$OUT/cli_inject" $RUN --flush $fm -f "Solid and checker" --log "$log" > "$OUT/inj_fl_$fm.out" 2>&1; rc=$?
+  check "flush $fm: exit 1, the same 42 planted lines / 44 bits found" '[ $rc -eq 1 ] && [ "$(grep -c "^ERROR" "$log")" = "42" ] && grep -q "42 bad lines, 44 bits" "$OUT/inj_fl_$fm.out" || { echo "    rc=$rc"; tail -4 "$OUT/inj_fl_$fm.out"; false; }'
+done
+check "flush: banner names CLFLUSH when forced" 'grep -q "^flush instruction: CLFLUSH$" "$OUT/inj_fl_clflush.out"'
+if [ $HAVE_OPT = 1 ]; then
+  check "flush: banner names CLFLUSHOPT for auto and clflushopt (this CPU has it)" 'grep -q "^flush instruction: CLFLUSHOPT$" "$OUT/inj_fl_auto.out" && grep -q "^flush instruction: CLFLUSHOPT$" "$OUT/inj_fl_clflushopt.out"'
+else
+  check "flush: without CLFLUSHOPT, auto uses CLFLUSH and clflushopt says it is not supported" 'grep -q "^flush instruction: CLFLUSH$" "$OUT/inj_fl_auto.out" && grep -q "CLFLUSHOPT not supported" "$OUT/inj_fl_clflushopt.out"'
 fi
 log="$OUT/inj_page.log"; rm -f "$log"
 timeout $TMO "$OUT/cli_inject" $RUN -f "Page shuffle" --log "$log" > "$OUT/inj_page.out" 2>&1; rc=$?

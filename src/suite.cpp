@@ -237,6 +237,7 @@ struct SuiteDriver {
         cfg.logFile = s.logFile;
         cfg.loops = s.loops;
         R.rng = s.rngMode;
+        set_flush_mode(s.flushMode); // before any worker exists: the hot path reads the choice without synchronisation
         runSeed = s.seedSet ? s.seed : fresh_seed();
     }
 
@@ -302,6 +303,9 @@ struct SuiteDriver {
         }
         R.log.emitf("%d threads, testing %.2f GiB%s, %zu tests\n", R.layout.T, total / 1073741824.0, freeTxt.c_str(),
                     sel.size());
+        R.log.emitf(
+            "flush instruction: %s%s\n", flush_mode_name(),
+            s.flushMode == FlushMode::ClFlushOpt && !flush_uses_opt() ? " (CLFLUSHOPT not supported by this CPU)" : "");
         R.log.emitf("run seed: 0x%016llX (%s)  to reproduce: --seed 0x%016llX with the same -mb and -t\n",
                     (unsigned long long)runSeed, s.seedSet ? "given" : "random", (unsigned long long)runSeed);
     }

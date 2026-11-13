@@ -27,6 +27,9 @@ static void usage() {
     puts("ddr5test_cli [-mb MB] [-t threads] [-l loops] [-f name-filter] [--quick] [--coverage PCT] [--minutes N]\n"
          "             [--test-seconds N] [--cache default|bypass|cached|nt] [--rng default|splitmix|murmur|xorshift] "
          "[--fpu]\n"
+         "             [--flush auto|clflush|clflushopt]   (how flushed accesses evict lines; auto = CLFLUSHOPT when "
+         "the CPU "
+         "has it)\n"
          "             [--seed N|0xHEX]   (each run picks a random seed and prints it; pass it back with the same -mb "
          "/ -t to repeat the run)\n"
          "             [--keep-going | --stop-on-error] [--no-large-pages] [--log FILE] [--list]\n"
@@ -118,6 +121,10 @@ int main(int argc, char** argv) {
             int k = choice({"default", "bypass", "cached", "nt"});
             if (k >= 0)
                 s.cacheMode = (CacheMode)k; // same order as the enum
+        } else if (a == "--flush") {
+            int k = choice({"auto", "clflush", "clflushopt"});
+            if (k >= 0)
+                s.flushMode = (FlushMode)k; // same order as the enum
         } else if (a == "--rng") {
             int k = choice({"default", "splitmix", "murmur", "xorshift"});
             if (k >= 0)

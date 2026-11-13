@@ -68,6 +68,7 @@ set(ENGINE_SOURCES
   src/algo_pagemix.cpp
   src/algo_probe.cpp
   src/algo_rwstorm.cpp
+  src/flush.cpp
   src/gen.cpp
   src/log.cpp
   src/order.cpp

@@ -12,6 +12,8 @@
 #include <atomic>
 #include <chrono>
 #include "algo.h"
+#include "flush.h"
+#include "lineio.h"
 #include "gen.h"
 #include "log.h"
 #include "order.h"
@@ -315,6 +317,36 @@ static void test_suite_keys() {
 
 // --cache (Settings::cacheMode) must reach every algo that has a flush / nt key, evolve included, and must not add the
 // key to an algo that lacks it. Checked over the whole built-in suite for each of the three overriding modes.
+// The flush instruction is chosen once per run: Auto / ClFlushOpt use CLFLUSHOPT exactly when the CPU reports it,
+// ClFlush never does, and --cache bypass style accesses (IO<..., FL=1>) keep the data intact in every mode.
+static void test_flush_mode() {
+    const bool has = cpu_has_clflushopt();
+    set_flush_mode(FlushMode::ClFlush);
+    CHECK(!flush_uses_opt() && !strcmp(flush_mode_name(), "CLFLUSH"), "ClFlush must force plain CLFLUSH");
+    set_flush_mode(FlushMode::Auto);
+    CHECK(flush_uses_opt() == has, "Auto must use CLFLUSHOPT iff the CPU has it (cpu=%d)", (int)has);
+    set_flush_mode(FlushMode::ClFlushOpt);
+    CHECK(flush_uses_opt() == has, "ClFlushOpt must fall back to CLFLUSH on a CPU without it (cpu=%d)", (int)has);
+    CHECK(!strcmp(flush_mode_name(), has ? "CLFLUSHOPT" : "CLFLUSH"), "mode name does not match the instruction used");
+    for (FlushMode m : {FlushMode::ClFlush, FlushMode::Auto}) {
+        set_flush_mode(m);
+        using io = IO<32, 0, 1>; // an alias: a comma inside CHECK(...) would split the macro arguments
+        alignas(64) Line mem[4];
+        for (int i = 0; i < 4; i++) {
+            Line e;
+            for (int k = 0; k < 8; k++)
+                e.w[k] = splitmix(i * 8 + k);
+            io::store(&mem[i], e);
+            Line act;
+            CHECK(io::verify(&mem[i], e, act), "mode %d: flushed store/verify of line %d failed", (int)m, i);
+            e.w[3] ^= 1;
+            CHECK(!io::verify(&mem[i], e, act) && act.w[3] == (e.w[3] ^ 1),
+                  "mode %d: a wrong expectation must be reported with the data actually read", (int)m);
+        }
+    }
+    set_flush_mode(FlushMode::Auto);
+}
+
 static void test_cache_override() {
     const struct {
         CacheMode mode;
@@ -1146,6 +1178,7 @@ int main() {
     test_suite_parses();
     test_suite_keys();
     test_cache_override();
+    test_flush_mode();
     test_shared_key_sets();
     test_values();
     test_run_status();

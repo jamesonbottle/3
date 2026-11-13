@@ -16,7 +16,7 @@ The window follows the familiar two-tab layout (Testing / Advanced) used by popu
 **Seed.** Every run picks a random seed and prints it first thing (`run seed: 0x... (random)`); it is also in the log header and repeated in the failure summary. The seed decides every random choice - hash data, random access orders, disturb traffic, page-shuffle patterns, pointer-chase layout - and each loop of a long run derives fresh ones from it, so a soak never repeats itself. To repeat a run, give the console tool `--seed 0x...` (decimal also works) with the same `-mb` and `-t`, which decide the data layout. A seed reproduces the data and access order, **not** thread timing or where the OS puts physical pages, so the timed tests (page shuffle, cache coherency) and marginal hardware can still behave differently from run to run.
 
 Advanced tab
-- **CPU cache**: Default (each test decides), Bypass (clflush every access so reads come from DRAM), Cached, Non-temporal (streaming stores).
+- **CPU cache**: Default (each test decides), Bypass (clflush every access so reads come from DRAM), Cached, Non-temporal (streaming stores). Flushing uses CLFLUSHOPT when the CPU has it (several times faster than CLFLUSH, which serialises), otherwise CLFLUSH; the run header names the instruction. CLI: `--flush clflush` forces plain CLFLUSH (for comparison), `--flush clflushopt` / `auto` (default) use CLFLUSHOPT when available.
 - **RNG**: generator used by the hash tests.
 - **Test set**: Full (28 tests) or Quick (the 12 tests marked quick). *This is an addition to the reference layout.*
 - **Stress FPU**: AVX load on every thread - more power and heat, for testing marginal supply.

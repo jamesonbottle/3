@@ -76,7 +76,7 @@ static void pm_invert(u8* p) {
             _mm256_store_si256((__m256i*)a, x);
             _mm256_store_si256((__m256i*)a + 1, y);
             if constexpr (FL)
-                _mm_clflush(a);
+                flush_line(a);
             CBAR();
         }
 }
