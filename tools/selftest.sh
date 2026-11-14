@@ -132,12 +132,8 @@ else
 fi
 
 echo "== 3. fault injection: planted faults must be found"
-log="$OUT/inj_fill.log"; rm -f "$log"
-timeout $TMO "$OUT/cli_inject" $RUN -f "Solid and checker" --log "$log" > "$OUT/inj_fill.out" 2>&1; rc=$?
-check "fill: exit code 1"                       '[ $rc -eq 1 ]'
-check "fill: exactly the 42 planted lines found" '[ "$(grep -c "^ERROR" "$log")" = "42" ]'
-check "fill: 44 flipped bits counted"            'grep -q "42 bad lines, 44 bits" "$OUT/inj_fill.out"'
-check "fill: single-bit and 3-bit faults both logged" 'grep -q "lanes=0x00000001 bits=1" "$log" && grep -Eq "bits=3 " "$log"'
+. tools/inject_checks.sh   # the portable checks (fill, page shuffle, coherency, evolve, march, chase, copy, rwstorm, stop-on-error); the same file runs on the Windows runner
+inject_checks_portable "$OUT/cli_inject" "$OUT"
 check "fill: no log-write warning when the log is healthy" '! grep -q "cannot write to the log file" "$OUT/inj_fill.out"'
 if [ -w /dev/full ]; then
   # /dev/full opens fine and fails every flush with ENOSPC: the errors must still be counted, exit 1, and the failure must be said once
@@ -162,9 +158,6 @@ if [ $HAVE_OPT = 1 ]; then
 else
   check "flush: without CLFLUSHOPT, auto uses CLFLUSH and clflushopt says it is not supported" 'grep -q "^flush instruction: CLFLUSH$" "$OUT/inj_fl_auto.out" && grep -q "CLFLUSHOPT not supported" "$OUT/inj_fl_clflushopt.out"'
 fi
-log="$OUT/inj_page.log"; rm -f "$log"
-timeout $TMO "$OUT/cli_inject" $RUN -f "Page shuffle" --log "$log" > "$OUT/inj_page.out" 2>&1; rc=$?
-check "page shuffle: exit 1, flip caught in final verify" '[ $rc -eq 1 ] && grep -q "pagemix-final" "$log"'
 log="$OUT/inj_pagestop.log"; rm -f "$log"
 DDR5TEST_STOP_IN_FILL=1 timeout $TMO "$OUT/cli_inject" $RUN -f "Page shuffle" --log "$log" > "$OUT/inj_pagestop.out" 2>&1; rc=$?
 check "page shuffle: stopped mid-fill (hard stop): the final verify is skipped, so not even the planted flip is reported, and no false error from pages never filled" '[ $rc -eq 0 ] && [ "$(grep -c "^ERROR" "$log")" = "0" ] || { echo "    rc=$rc ERROR lines: $(grep -c "^ERROR" "$log")"; false; }'
@@ -176,43 +169,15 @@ check "page shuffle: flip in the last page is found when the final verify runs t
 log="$OUT/inj_latestop.log"; rm -f "$log"
 DDR5TEST_FINAL_LATE_FLIP=1 DDR5TEST_STOP_IN_FINAL=1 timeout $TMO "$OUT/cli_inject" $RUN -f "Page shuffle" --log "$log" > "$OUT/inj_latestop.out" 2>&1; rc=$?
 check "page shuffle: stop raised during the final verify ends it: the late flip is not reported, nothing false is" '[ $rc -le 1 ] && ! grep "^ERROR" "$log" | grep -q " off=0x3FFF[0-9A-F]* " && [ "$(grep "^ERROR" "$log" | grep -vc "pagemix-final.* off=0x3[0-9A-F]\{3\} ")" = "0" ] || { echo "    rc=$rc"; grep "^ERROR" "$log" | cut -c1-140; false; }'
-log="$OUT/inj_coh.log"; rm -f "$log"
-timeout $TMO "$OUT/cli_inject" $RUN -f "Cache coherency" --log "$log" > "$OUT/inj_coh.out" 2>&1; rc=$?
-check "coherency: exit 1, lost increment caught"          '[ $rc -eq 1 ] && grep -q "coherency" "$log"'
-log="$OUT/inj_evo.log"; rm -f "$log"
-timeout $TMO "$OUT/cli_inject" $RUN -f "Evolving data" --log "$log" > "$OUT/inj_evo.out" 2>&1; rc=$?
-check "evolve: exit 1" '[ $rc -eq 1 ]'
-check "evolve: exactly the lost write and the stray flip are found (2 lines)" '[ "$(grep -c "^ERROR" "$log")" = "2" ] && [ "$(grep -c "evolve-verify" "$log")" = "2" ] || { grep "run seed" "$OUT/inj_evo.out"; false; }'
-check "evolve: lost write shows as a whole stale line, the stray change as a single bit" 'grep -Eq "bits=1 " "$log" && grep -Eq "bits=[0-9]{3} " "$log"'
 log="$OUT/inj_evostop.log"; rm -f "$log"
 DDR5TEST_STOP_IN_EVOLVE=1 timeout $TMO "$OUT/cli_inject" $RUN -f "Evolving data" --log "$log" > "$OUT/inj_evostop.out" 2>&1; rc=$?
 check "evolve: stopped mid-rewrite reports no errors (lines the cut-short pass never reached are not verified)" '[ $rc -eq 0 ] && [ "$(grep -c "^ERROR" "$log" 2>/dev/null)" = "0" ] || { echo "    rc=$rc ERROR lines: $(grep -c "^ERROR" "$log" 2>/dev/null)"; grep "run seed" "$OUT/inj_evostop.out"; false; }'
-log="$OUT/inj_march.log"; rm -f "$log"
-timeout $TMO "$OUT/cli_inject" $RUN -f "Classic marches" --log "$log" > "$OUT/inj_march.out" 2>&1; rc=$?
-check "march: exit 1, exactly the 3 planted lines (5 bits) found by the read right after the write element" '[ $rc -eq 1 ] && [ "$(grep -c "^ERROR" "$log")" = "3" ] && [ "$(grep -c "march el1 r0" "$log")" = "3" ] && grep -q "3 bad lines, 5 bits" "$OUT/inj_march.out" || { echo "    rc=$rc ERROR lines: $(grep -c "^ERROR" "$log" 2>/dev/null)"; grep "run seed" "$OUT/inj_march.out"; false; }'
-log="$OUT/inj_chase.log"; rm -f "$log"
-timeout $TMO "$OUT/cli_inject" $RUN -f "Pointer chase" --log "$log" > "$OUT/inj_chase.out" 2>&1; rc=$?
-check "chase: exit 1, all 3 planted lines found (2 in one chain, one of them a pointer flip, plus 1 in another chain; 3 bits)" '[ $rc -eq 1 ] && [ "$(grep -c "^ERROR" "$log")" = "3" ] && [ "$(grep -c " chase thr=0 " "$log")" = "3" ] && grep -q "3 bad lines, 3 bits" "$OUT/inj_chase.out" || { echo "    rc=$rc ERROR lines: $(grep -c "^ERROR" "$log" 2>/dev/null)"; grep "run seed" "$OUT/inj_chase.out"; false; }'
-log="$OUT/inj_copy.log"; rm -f "$log"
-timeout $TMO "$OUT/cli_inject" $RUN -f "Bulk copy" --log "$log" > "$OUT/inj_copy.out" 2>&1; rc=$?
-check "copy: exit 1, exactly 2 corrupted destination lines and 1 corrupted source line (4 bits) found" '[ $rc -eq 1 ] && [ "$(grep -c "^ERROR" "$log")" = "3" ] && [ "$(grep -c "copy-dst" "$log")" = "2" ] && [ "$(grep -c "copy-src" "$log")" = "1" ] && grep -q "3 bad lines, 4 bits" "$OUT/inj_copy.out" || { echo "    rc=$rc ERROR lines: $(grep -c "^ERROR" "$log" 2>/dev/null)"; grep "run seed" "$OUT/inj_copy.out"; false; }'
 log="$OUT/inj_copystop.log"; rm -f "$log"
 DDR5TEST_STOP_IN_COPY_FILL=1 timeout $TMO "$OUT/cli_inject" $RUN -f "Bulk copy" --log "$log" > "$OUT/inj_copystop.out" 2>&1; rc=$?
 check "copy: stopped mid-fill ends the fill, skips copy and verify: exit 0, nothing reported (neither the planted faults nor never-written lines)" '[ $rc -eq 0 ] && [ "$(grep -c "^ERROR" "$log")" = "0" ] && grep -q " STOP " "$OUT/inj_copystop.out" || { echo "    rc=$rc ERROR lines: $(grep -c "^ERROR" "$log")"; tail -4 "$OUT/inj_copystop.out"; false; }'
-log="$OUT/inj_rw.log"; rm -f "$log"
-# TSan exclusion, same reason as in the clean runs: the writer and its verifying partner race by design
-if [ "$SAN" = thread ]; then
-  echo "  SKIP  rwstorm injection (races by design, see the comment at the clean-run list)"
-else
-  timeout $TMO "$OUT/cli_inject" $RUN -f "Read/write storm, hash data" --log "$log" > "$OUT/inj_rw.out" 2>&1; rc=$?
-  check "rwstorm: exit 1, 2 planted lines found by the final check (thr 0) and 1 read-side fault by the concurrent verify (thr 1); 4 bits" '[ $rc -eq 1 ] && [ "$(grep -c "^ERROR" "$log")" = "3" ] && [ "$(grep -c "rwstorm-read thr=0 " "$log")" = "2" ] && [ "$(grep -c "rwstorm-read thr=1 " "$log")" = "1" ] && grep -q "3 bad lines, 4 bits" "$OUT/inj_rw.out" || { echo "    rc=$rc ERROR lines: $(grep -c "^ERROR" "$log" 2>/dev/null)"; grep "run seed" "$OUT/inj_rw.out"; false; }'
-fi
 log="$OUT/inj_throw.log"; rm -f "$log"
 DDR5TEST_THROW_IN_WORKER=1 timeout $TMO "$OUT/cli_inject" $RUN -f "Solid and checker" --fpu --log "$log" > "$OUT/inj_throw.out" 2>&1; rc=$?
 check "worker exception: exit 3 and 'internal error' logged (no terminate, no hang; --fpu threads joined)" '[ $rc -eq 3 ] && grep -q "internal error: injected worker failure" "$OUT/inj_throw.out" || { echo "    rc=$rc"; tail -5 "$OUT/inj_throw.out"; false; }'
-log="$OUT/inj_stop.log"; rm -f "$log"
-timeout $TMO "$OUT/cli_inject" $RUN -f "Solid and checker" --stop-on-error --log "$log" > "$OUT/inj_stop.out" 2>&1; rc=$?
-check "stop-on-error: exit 1 and no hang (barrier shutdown)" '[ $rc -eq 1 ]'
 # Barrier protocol (G1): worker 0 makes one sync() call more than worker 1 in a run that is never stopped. The debug check must end the run with
 # the message and death by signal (SIGABRT, rc >= 128): exit 1 would not do, because the planted fill faults give exit 1 anyway, and 124 is a hang.
 # Without the variable the same build runs normally

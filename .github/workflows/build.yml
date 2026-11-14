@@ -37,6 +37,17 @@ jobs:
       - name: Build
         shell: cmd
         run: build.bat
+      - name: Build the test programs (unit tests, fault-injection console build)
+        # Same MSVC flags as the shipped build. build.bat configured build\cmake; all executables land in build\.
+        shell: cmd
+        run: cmake --build build\cmake --config Release --target unit_tests ddr5test_cli_inject || exit /b 1
+      - name: Unit tests (MSVC build)
+        shell: cmd
+        run: ctest --test-dir build\cmake -C Release -R "^unit_tests$" --output-on-failure || exit /b 1
+      - name: Fault injection (MSVC build must report every planted fault)
+        # tools/inject_checks.sh is the same file tools/selftest.sh runs on Linux; Git Bash is on the runner. Red if any planted fault is missed.
+        shell: bash
+        run: bash tools/inject_checks.sh build/ddr5test_cli_inject.exe build/inject_checks
       - name: Smoke test (console build, quick suite, 64 MB)
         shell: cmd
         run: build\ddr5test_cli.exe -mb 64 -t 2 --quick --minutes 1 --no-large-pages || exit /b 1
