@@ -24,8 +24,11 @@ struct SatPat {
     int weight[4];
 };
 const std::vector<SatPat>& sat_table();
+// Every table length is a power of two (1, 2, 4 or 64; sat_table() aborts otherwise), so the index wraps with a mask: a
+// runtime `%` here is a 64-bit division per 32-bit word and halved the speed of the cached pattern tests (AUDIT_PLAN
+// D2).
 static inline u32 sat_word(const SatPat& p, u64 idx, int rep) {
-    return p.w[(idx >> rep) % (u64)p.len];
+    return p.w[(idx >> rep) & (u64)(p.len - 1)];
 }
 
 struct Gen {
@@ -34,7 +37,7 @@ struct Gen {
     int rep = 0;
     Line pat{}, inv{};
     u64 seed = 0;
-    int rng = 0; // mixer of the hash data (kind 1): 0 splitmix64, 1 murmur3 fmix64, 2 xorshift64*
+    Rng rng = Rng::Default; // mixer of the hash data (kind 1)
     int altshift = -1;
     u64 modn = 0, modoff = 0; // modulo-N: every Nth line (offset) is inverted
     void set_beats(const Beats& b) {
@@ -74,6 +77,6 @@ struct Var {
     Gen g;
 };
 
-std::vector<Var> build_vars(const Params& P, u64 salt, int rng, const Logger& log); // salt, rng: Run::salt, Run::rng
+std::vector<Var> build_vars(const Params& P, u64 salt, Rng rng, const Logger& log); // salt, rng: Run::salt, Run::rng
 
 } // namespace ddr5

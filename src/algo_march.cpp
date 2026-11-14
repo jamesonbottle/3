@@ -1,6 +1,7 @@
 // algo_march.cpp - user-defined march tests.
 #include "algo.h"
 #include "gen.h"
+#include "inject.h"
 #include "lineio.h"
 #include "log.h"
 #include "order.h"
@@ -14,7 +15,7 @@
 namespace ddr5 {
 
 // ------------------------------------------------------------------ algo: march (user-defined march tests)
-static std::vector<MEl> parse_march(const std::string& s, const Logger& log) {
+static std::vector<MEl> parse_march(const std::string& s, const Logger& log, const std::string& where) {
     std::vector<MEl> out;
     for (auto& tok : split_ws(s)) {
         if (tok.size() < 3)
@@ -23,13 +24,17 @@ static std::vector<MEl> parse_march(const std::string& s, const Logger& log) {
         e.dir = tok[0];
         size_t a = tok.find('('), b = tok.rfind(')');
         if (a == std::string::npos || b == std::string::npos) {
-            log.emitf("bad march element '%s'\n", tok.c_str());
+            log.emitf("%sbad march element '%s'\n", where.c_str(), tok.c_str());
             continue;
         }
         std::string body = tok.substr(a + 1, b - a - 1);
         if (e.dir == 'D' || e.dir == 'd') {
             e.delay = true;
-            e.ms = pnum(body);
+            if (!pnum_checked(body, e.ms)) {
+                log.emitf("%sbad march element '%s' (delay must be a whole number of ms)\n", where.c_str(),
+                          tok.c_str());
+                continue;
+            }
             out.push_back(e);
             continue;
         }
@@ -39,7 +44,16 @@ static std::vector<MEl> parse_march(const std::string& s, const Logger& log) {
                 k++;
             e.dist = true;
             e.dmode = std::max(0, parse_dmode(lower(body.substr(0, k))));
-            e.dpasses = k < body.size() ? std::max<u64>(1, pnum(body.substr(k))) : 1;
+            e.dpasses = 1;
+            if (k < body.size()) {
+                u64 np = 0;
+                if (!pnum_checked(body.substr(k), np)) {
+                    log.emitf("%sbad march element '%s' (disturb passes must be a whole number)\n", where.c_str(),
+                              tok.c_str());
+                    continue;
+                }
+                e.dpasses = std::max<u64>(1, np);
+            }
             out.push_back(e);
             continue;
         }
@@ -50,7 +64,7 @@ static std::vector<MEl> parse_march(const std::string& s, const Logger& log) {
     }
     return out;
 }
-std::vector<MVar> parse_march_variants(const std::string& str, const Logger& log) {
+std::vector<MVar> parse_march_variants(const std::string& str, const Logger& log, const std::string& where) {
     std::vector<MVar> out;
     std::vector<std::string> parts;
     std::string cur;
@@ -72,7 +86,7 @@ std::vector<MVar> parse_march_variants(const std::string& str, const Logger& log
             part = part.substr(eq + 1);
         }
         MVar v;
-        v.els = parse_march(part, log);
+        v.els = parse_march(part, log, where);
         if (v.els.empty())
             continue;
         v.label = label.empty() ? "march" + std::to_string(out.size() + 1) : label;
@@ -88,13 +102,13 @@ const std::set<std::string>& MarchOpts::keys() {
 }
 MarchOpts MarchOpts::from(const Params& P, const Logger& log) {
     MarchOpts o;
-    o.variants = parse_march_variants(P.str("march"), log);
+    o.variants = parse_march_variants(P.str("march"), log, P.where());
     if (o.variants.empty())
         return o; // algo_march reports "no elements"; a bad `order` is not reported then (as before)
     for (auto& w : P.words("order", "seq")) {
         OrderSpec os;
         if (!Order::parse(w, os.k, os.rev)) {
-            log.emitf("bad order '%s'\n", w.c_str());
+            log.emitf("%sbad order '%s'\n", P.where().c_str(), w.c_str());
             continue;
         }
         o.orders.push_back({w, os});
@@ -152,7 +166,8 @@ void algo_march(Run& R, const Params& P) {
                                  (opt.orders.size() > 1 || on.second.k != Order::SEQ || on.second.rev
                                       ? " order=" + on.first
                                       : "") +
-                                 (on.second.k == Order::STRIDE ? " stride=" + std::to_string(s * 64) + "B" : "") +
+                                 (on.second.k == Order::STRIDE ? " stride=" + std::to_string(s * kLineBytes) + "B"
+                                                               : "") +
                                  (opt.bursts.size() > 1 || b > 1 ? " burst=" + std::to_string(b) : ""),
                              &v.g, mi, on.second, s, b});
             }
@@ -190,7 +205,7 @@ void algo_march(Run& R, const Params& P) {
                     }
                     bool down = (e.dir == 'v' || e.dir == 'V') != j.os.rev;
                     auto apply = [&](const MOp& op, u64 i) {
-                        u8* a = w.base + i * 64;
+                        u8* a = w.base + i * kLineBytes;
                         Line l;
                         j.g->make(w.g + i, a, op.v != 0, l);
                         if (op.t == 'w')
@@ -210,13 +225,14 @@ void algo_march(Run& R, const Params& P) {
                             for (u64 q = q0; q < qe; q++)
                                 apply(op, o.pos(q, down));
                         cnt += qe - q0;
-                        if (cnt >= 0x10000) {
+                        if (cnt >= kTickLines) {
                             R.tick();
-                            cnt -= 0x10000;
+                            cnt -= kTickLines;
                         }
                     }
                     _mm_sfence();
                     R.sync();
+                    DDR5_INJECT(march_after_element, tid, ji, ei, w);
                 }
             });
         }

@@ -20,6 +20,7 @@
 #include "log.h"
 #include "platform.h"
 #include "run.h"
+#include "stop_gate.h"
 #include "suite.h"
 #include "types.h"
 #include <memory>
@@ -77,12 +78,14 @@ struct App {
     double endT = 0;
     u64 lastErr = 0;
     bool stopRequested = false;
+    StopGate gate; // Stop / close rules (stop_gate.h); UI thread only
     bool mbAuto = true,
          setting = true; // mbAuto: Megabytes follows free RAM and thread count until the user types a value
     std::mutex logMu;
     FILE* log = nullptr;
     std::string lastLine;
     int logWhere = 0; // 0 = next to the exe, 1 = %TEMP% (exe folder not writable), 2 = no log file could be opened
+    std::atomic<bool> logFailed{false}; // a write to the log file failed (disk full...): details are missing from it
     std::unordered_map<HWND, std::wstring> shown; // last text per control, to avoid flicker
     u64 totalMB = 0;
 } A;
@@ -140,6 +143,13 @@ void set_running_ui(bool running) {
     EnableWindow(A.hStart, TRUE);
 }
 
+// What the status line says while a stop is under way.
+const wchar_t* stopping_text() {
+    if (A.gate.force_offered())
+        return L"Stuck? Force quit ends the program";
+    return A.gate.closing() ? L"Stopping, then closing..." : L"Stopping...";
+}
+
 void refresh() {
     MEMORYSTATUSEX m{};
     m.dwLength = sizeof m;
@@ -151,6 +161,10 @@ void refresh() {
         return;
     Run& R = *A.run;
     bool busy = A.busy.load();
+    if (busy && A.gate.tick(plat::now())) { // the stop is taking a while: the button becomes the way out
+        setText(A.hStart, L"Force quit");
+        EnableWindow(A.hStart, TRUE);
+    }
     const Run::Status S = R.status();
     double t = S.tStart > 0 ? (busy ? plat::now() : A.endT) - S.tStart : 0;
     if (t < 0)
@@ -169,7 +183,9 @@ void refresh() {
         InvalidateRect(A.hErr, nullptr, TRUE);
     }
     const std::string& lab = S.label;
-    if (busy)
+    if (busy && A.gate.stopping())
+        setText(A.hTest, stopping_text());
+    else if (busy)
         setText(A.hTest, S.tStart > 0 ? std::wstring(lab.begin(), lab.end()) : L"Allocating memory...");
     else if (!A.stopRequested && err == 0 && S.tStart > 0)
         setText(A.hTest, L"Finished");
@@ -219,9 +235,9 @@ void start_run() {
     A.setting = false;
     SetWindowTextW(A.hThr, std::to_wstring(s.threads).c_str());
     s.stopOnError = SendMessageW(A.hStopErr, BM_GETCHECK, 0, 0) == BST_CHECKED;
-    s.cacheMode = std::max(0, (int)SendMessageW(A.hCache, CB_GETCURSEL, 0, 0));
-    s.rngMode = std::max(0, (int)SendMessageW(A.hRng, CB_GETCURSEL, 0, 0));
-    s.suite = std::max(0, (int)SendMessageW(A.hSet, CB_GETCURSEL, 0, 0));
+    s.cacheMode = (CacheMode)std::max(0, (int)SendMessageW(A.hCache, CB_GETCURSEL, 0, 0)); // list order = enum order
+    s.rngMode = (Rng)std::max(0, (int)SendMessageW(A.hRng, CB_GETCURSEL, 0, 0));
+    s.suite = (SuiteSet)std::max(0, (int)SendMessageW(A.hSet, CB_GETCURSEL, 0, 0));
     s.stressFpu = SendMessageW(A.hFpu, BM_GETCHECK, 0, 0) == BST_CHECKED;
     s.largePages = true;
     s.loops = 0; // runs until stopped
@@ -231,6 +247,7 @@ void start_run() {
         A.log = _wfopen(exe_dir_file(L"ddr5ramtest.log").c_str(), L"a");
         A.lastLine.clear();
         A.logWhere = 0;
+        A.logFailed = false;
         if (!A.log) { // exe folder not writable (e.g. Program Files): fall back to the temp folder rather than losing
                       // the error details
             wchar_t tp[MAX_PATH + 1];
@@ -245,19 +262,20 @@ void start_run() {
         if (A.log) {
             SYSTEMTIME st;
             GetLocalTime(&st);
-            fprintf(A.log,
-                    "---- DDR5 RAM Test run %04d-%02d-%02d %02d:%02d:%02d  %llu MB, %d threads, cache=%d rng=%d set=%d "
-                    "fpu=%d stop-on-error=%d ----\n",
-                    st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond, (unsigned long long)s.megabytes,
-                    s.threads, s.cacheMode, s.rngMode, s.suite, (int)s.stressFpu, (int)s.stopOnError);
+            if (fprintf(A.log,
+                        "---- DDR5 RAM Test run %04d-%02d-%02d %02d:%02d:%02d  %llu MB, %d threads, cache=%d rng=%d "
+                        "set=%d fpu=%d stop-on-error=%d ----\n",
+                        st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond, (unsigned long long)s.megabytes,
+                        s.threads, (int)s.cacheMode, (int)s.rngMode, (int)s.suite, (int)s.stressFpu,
+                        (int)s.stopOnError) < 0 ||
+                fflush(A.log) != 0)
+                A.logFailed = true;
         }
     }
     A.logger.sink = [](const std::string& t) {
         std::lock_guard<std::mutex> l(A.logMu);
-        if (A.log) {
-            fputs(t.c_str(), A.log);
-            fflush(A.log);
-        }
+        if (A.log && (fputs(t.c_str(), A.log) == EOF || fflush(A.log) != 0))
+            A.logFailed = true; // shown once, in the end text (on_run_done); the lines still reach the log pane
         size_t e = t.find_last_not_of("\r\n");
         if (e != std::string::npos) {
             size_t b = t.find_last_of('\n', e);
@@ -275,6 +293,7 @@ void start_run() {
     setText(A.hTest, L"Allocating memory...");
     InvalidateRect(A.hErr, nullptr, TRUE);
     A.busy = true;
+    A.gate.on_run_start();
     set_running_ui(true);
     Run* R = A.run.get();
     HWND wnd = A.wnd;
@@ -289,12 +308,38 @@ void request_stop() {
         return;
     A.stopRequested = true;
     A.run->stop = true;
-    setText(A.hStart, L"Stopping...");
+    setText(A.hStart, L"Stopping..."); // turns into "Force quit" after a few seconds (StopGate::tick)
     EnableWindow(A.hStart, FALSE);
     setText(A.hTest, L"Stopping...");
 }
 
-void on_run_done(int rc) {
+// The way out of a stop that does not finish (one long OS call, a wedged run): end the process at once, like the CLI's
+// second Ctrl-C. The log lines are flushed as they are written, so only the open file handle is dropped here. The
+// worker may hold the log mutex, so it is only tried; TerminateProcess (not ExitProcess) because the static App would
+// otherwise destroy a joinable std::thread.
+[[noreturn]] void force_exit() {
+    if (A.logMu.try_lock()) {
+        if (A.log) {
+            fclose(A.log);
+            A.log = nullptr;
+        }
+        A.logMu.unlock();
+    }
+    TerminateProcess(GetCurrentProcess(), 1);
+    std::abort();
+}
+
+// Carry out what the StopGate decided.
+void apply_gate(StopGate::Act a) {
+    if (a == StopGate::Act::ForceExit)
+        force_exit();
+    if (a == StopGate::Act::RequestStop)
+        request_stop();
+    else if (a == StopGate::Act::CloseNow)
+        DestroyWindow(A.wnd);
+}
+
+void on_run_done(int rc, bool closing) {
     if (A.worker.joinable())
         A.worker.join();
     A.endT = plat::now();
@@ -311,7 +356,8 @@ void on_run_done(int rc) {
     set_running_ui(false);
     refresh();
     if (A.run && A.run->error_count() > 0)
-        setText(A.hTest, A.stopRequested   ? L"Stopped (errors found)"
+        setText(A.hTest, A.logFailed       ? L"Errors found - the log file could not be written completely (disk full?)"
+                         : A.stopRequested ? L"Stopped (errors found)"
                          : A.logWhere == 0 ? L"Errors found - see ddr5ramtest.log"
                          : A.logWhere == 1 ? L"Errors found - log is in %TEMP%"
                                            : L"Errors found (no log file could be written)");
@@ -319,6 +365,8 @@ void on_run_done(int rc) {
         setText(A.hTest, L"Stopped");
     if (rc >= 2) {
         setText(A.hTest, L"Could not run");
+        if (closing)
+            return; // the user is closing the window: no box in the way
         std::wstring msg(last.begin(), last.end());
         if (msg.empty())
             msg = L"The test could not start.";
@@ -484,14 +532,17 @@ LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         }
         if (LOWORD(wp) == ID_START && HIWORD(wp) == BN_CLICKED) {
             if (A.busy.load())
-                request_stop();
+                apply_gate(A.gate.on_stop_click(plat::now()));
             else
                 start_run();
         }
         return 0;
-    case WM_RUN_DONE:
-        on_run_done((int)wp);
+    case WM_RUN_DONE: { // gate first: refresh() inside on_run_done must not offer "Force quit" for a run that has ended
+        StopGate::Act a = A.gate.on_run_done(); // CloseNow if the window was closed while the run was ending
+        on_run_done((int)wp, a == StopGate::Act::CloseNow);
+        apply_gate(a);
         return 0;
+    }
     case WM_CTLCOLORSTATIC: {
         HDC dc = (HDC)wp;
         SetBkMode(dc, TRANSPARENT);
@@ -501,14 +552,10 @@ LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
             SetTextColor(dc, GetSysColor(COLOR_WINDOWTEXT));
         return (LRESULT)GetSysColorBrush(COLOR_WINDOW);
     }
-    case WM_CLOSE:
-        if (A.busy.load() && A.run) {
-            A.run->stop = true;
-            if (A.worker.joinable())
-                A.worker.join();
-            A.busy = false;
-        }
-        DestroyWindow(h);
+    case WM_CLOSE: // never waits for the worker: the window stays alive until WM_RUN_DONE (or a forced exit)
+        apply_gate(A.gate.on_close(plat::now()));
+        if (A.gate.running())
+            setText(A.hTest, stopping_text());
         return 0;
     case WM_DESTROY:
         KillTimer(h, TIMER_ID);

@@ -45,7 +45,7 @@ void algo_coherency(Run& R, const Params& P) {
             if (tid == 0) {
                 R.set_label("cache coherency, " + std::to_string(L) + " shared lines, " + std::to_string(nt) +
                             " threads");
-                std::memset(mem, 0, L * 64);
+                std::memset(mem, 0, L * kLineBytes);
                 fin = false;
             }
             double end = plat::now() + secs;
@@ -58,7 +58,7 @@ void algo_coherency(Run& R, const Params& P) {
                         u64 line = x % L;
                         u64 off = (line & (u64)tid & 1) ? (u64)(nt & ~1) - tid
                                                         : (u64)tid; // owner byte position differs between lines
-                        volatile u8* c = mem + line * 64 + off;
+                        volatile u8* c = mem + line * kLineBytes + off;
                         *c = (u8)(*c + 1);
                     }
                 }
@@ -68,7 +68,7 @@ void algo_coherency(Run& R, const Params& P) {
                     u64 sum = 0;
                     for (u64 line = 0; line < L; line++) {
                         u64 off = (line & (u64)tid & 1) ? (u64)(nt & ~1) - tid : (u64)tid;
-                        volatile u8* c = mem + line * 64 + off;
+                        volatile u8* c = mem + line * kLineBytes + off;
                         sum += *c;
                         *c = 0;
                     }

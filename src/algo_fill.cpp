@@ -51,7 +51,7 @@ FillOpts FillOpts::from(const Params& P, const Logger& log) {
 void algo_fill(Run& R, const Params& P) {
     auto vars = build_vars(P, R.salt, R.rng, R.log);
     const FillOpts o = FillOpts::from(P, R.log);
-    const OrderSpec &wo = o.write, &vo = o.verify;
+    const OrderSpec &wo = o.write, &vo = o.verify; // wo / vo: write order and verify order
     u64 wl = R.window_lines(P);
     std::vector<int> dmodes = o.disturb;
     if (dmodes[0] >= 0 && !disturb_possible(R, wl, R.testName.c_str()))
@@ -72,7 +72,7 @@ void algo_fill(Run& R, const Params& P) {
                 for (u64 dw : o.dwell_ms)
                     for (int dm : dmodes)
                         jobs.push_back({v.label + (inv ? " [inverted]" : "") +
-                                            (o.strided ? " stride=" + std::to_string(s * 64) + "B" : "") +
+                                            (o.strided ? " stride=" + std::to_string(s * kLineBytes) + "B" : "") +
                                             (o.dwell_ms.size() > 1 ? " dwell=" + std::to_string(dw) + "ms" : "") +
                                             (dmodes.size() > 1 ? std::string(" disturb=") + dn[dm] : ""),
                                         &v.g, (bool)inv, s, dw, dm});
@@ -86,19 +86,20 @@ void algo_fill(Run& R, const Params& P) {
             if (tid == 0)
                 R.set_label(j.label);
             View w = R.view(tid, wl, base + ji), vw = R.view(o.cross ? (tid + 1) % R.layout.T : tid, wl, base + ji);
-            Order ow, ov;
+            Order ow, ov; // ow / ov: the write and the verify walk over this job's windows
             ow.init(wo.k, w.n, j.stride, 1 + ji, R.salt);
             ov.init(vo.k, vw.n, j.stride, 77 + ji, R.salt);
             dispatch(o.width, o.nt, o.flush, [&](auto Wc, auto NTc, auto FLc) {
                 using io = IO<decltype(Wc)::value, decltype(NTc)::value, decltype(FLc)::value>;
                 walk(R, ow, wo.rev, [&](u64 i) {
-                    u8* a = w.base + i * 64;
+                    u8* a = w.base + i * kLineBytes;
                     Line l;
                     j.g->make(w.g + i, a, j.inv, l);
                     io::store(a, l);
                 });
                 _mm_sfence();
                 R.sync();
+                DDR5_INJECT(after_fill_throw, tid);
                 DDR5_INJECT(after_fill, R, tid, ji, w);
                 if (j.dmode >= 0) {
                     disturb_traffic(R, R.dview(tid, wl, base + ji), j.dmode, o.disturb_passes,
@@ -113,7 +114,7 @@ void algo_fill(Run& R, const Params& P) {
                 }
                 for (u64 r = 0; r < o.reads && !R.stop; r++)
                     walk(R, ov, vo.rev, [&](u64 i) {
-                        const u8* a = vw.base + i * 64;
+                        const u8* a = vw.base + i * kLineBytes;
                         Line e, act;
                         j.g->make(vw.g + i, a, j.inv, e);
                         R.vtick();
@@ -123,6 +124,7 @@ void algo_fill(Run& R, const Params& P) {
             });
             R.sync();
         }
+        DDR5_INJECT(extra_sync, R, tid);
     });
 }
 

@@ -1,6 +1,7 @@
 // algo_copy.cpp - bulk copy engines (memcpy, rep movsb, non-temporal copy).
 #include "algo.h"
 #include "gen.h"
+#include "inject.h"
 #include "lineio.h"
 #include "log.h"
 #include "order.h"
@@ -22,7 +23,7 @@ const std::set<std::string>& CopyOpts::keys() {
 CopyOpts CopyOpts::from(const Params& P) {
     CopyOpts o;
     o.methods = P.words("method", "memcpy movsb ntcopy");
-    o.block = std::max<u64>(64, P.num("block", 64 * 1024));
+    o.block = std::max<u64>(kLineBytes, P.num("block", 64 * 1024));
     return o;
 }
 
@@ -50,23 +51,27 @@ void algo_copy(Run& R, const Params& P) {
             if (tid == 0)
                 R.set_label("copy " + j.label);
             View w = R.view(tid, wl, base + ji);
-            u64 bl = opt.block / 64, nA = w.n / 2 / bl * bl;
+            u64 bl = opt.block / kLineBytes, nA = w.n / 2 / bl * bl;
             using io = IO<32, 0, 1>;
             u8* A = w.base;
-            u8* B = w.base + nA * 64;
+            u8* B = w.base + nA * kLineBytes;
             for (u64 i = 0; i < nA; i++) {
-                u8* a = A + i * 64;
+                u8* a = A + i * kLineBytes;
                 Line l;
                 j.g->make(w.g + i, a, false, l);
                 io::store(a, l);
-                if (((i + 1) & 0xFFFF) == 0)
+                DDR5_INJECT(copy_fill_stop, R, tid, i);
+                if (((i + 1) & 0xFFFF) == 0) {
                     R.tick();
+                    if (R.stop.load(std::memory_order_relaxed))
+                        break; // the copy and verify below are skipped too: the data is only partly written
+                }
             }
             R.sync();
             for (u64 o = 0; o < nA && !R.stop; o += bl) {
-                u8* s = A + o * 64;
-                u8* d = B + o * 64;
-                size_t nb = bl * 64;
+                u8* s = A + o * kLineBytes;
+                u8* d = B + o * kLineBytes;
+                size_t nb = bl * kLineBytes;
                 if (j.m == "memcpy")
                     std::memcpy(d, s, nb);
                 else if (j.m == "movsb") {
@@ -78,20 +83,24 @@ void algo_copy(Run& R, const Params& P) {
                 } else
                     for (size_t k = 0; k < nb; k += 32)
                         _mm256_stream_si256((__m256i*)(d + k), _mm256_load_si256((const __m256i*)(s + k)));
-                R.add_done(bl * 64 * 2);
+                R.add_done(bl * kLineBytes * 2);
             }
             _mm_sfence();
             R.sync();
+            DDR5_INJECT(copy_after_copy, tid, ji, A, B, nA);
             for (int side = 0; side < 2 && !R.stop; side++)
                 for (u64 i = 0; i < nA; i++) {
-                    const u8* a = (side ? B : A) + i * 64;
+                    const u8* a = (side ? B : A) + i * kLineBytes;
                     Line e, act;
-                    j.g->make(w.g + i, A + i * 64, false, e);
+                    j.g->make(w.g + i, A + i * kLineBytes, false, e);
                     R.vtick();
                     if (!io::verify(a, e, act))
                         R.report(tid, a, e, act, side ? "copy-dst" : "copy-src");
-                    if (((i + 1) & 0xFFFF) == 0)
+                    if (((i + 1) & 0xFFFF) == 0) {
                         R.tick();
+                        if (R.stop.load(std::memory_order_relaxed))
+                            break;
+                    }
                 }
             R.sync();
         }

@@ -12,6 +12,13 @@ cmake_minimum_required(VERSION 3.20)
 project(ddr5ramtest CXX)
 
 set(DDR5_OUTPUT_DIR "${CMAKE_SOURCE_DIR}/build" CACHE PATH "Where the executables are placed")
+# Sanitizers for every target (GCC / Clang): thread, or address,undefined. Set by `SAN=... tools/selftest.sh`; empty = normal build.
+set(DDR5_SANITIZE "" CACHE STRING "Value for -fsanitize= (thread | address,undefined); empty for none")
+# Debug check of the barrier protocol (every worker must make the same number of Run::sync() calls; see run.h). Always on in
+# builds without NDEBUG; tools/selftest.sh turns it on in every leg, release flags included. Off by default.
+option(DDR5_CHECK_SYNC "Check that all workers make the same number of sync() calls" OFF)
+# MSVC only: treat warnings as errors (off by default; CI turns it on once /W4 is clean).
+option(DDR5_WARNINGS_AS_ERRORS "Build with /WX on MSVC" OFF)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -23,11 +30,27 @@ endif()
 
 # One place for the compiler flags every target shares (engine, front-ends, tests).
 add_library(ddr5_flags INTERFACE)
+if(DDR5_CHECK_SYNC)
+  target_compile_definitions(ddr5_flags INTERFACE DDR5_CHECK_SYNC=1)
+endif()
 if(MSVC)
-  target_compile_options(ddr5_flags INTERFACE /O2 /arch:AVX2 /EHsc /utf-8)
+  target_compile_options(ddr5_flags INTERFACE /O2 /arch:AVX2 /EHsc /utf-8 /W4)
+  if(DDR5_WARNINGS_AS_ERRORS)
+    target_compile_options(ddr5_flags INTERFACE /WX)
+  endif()
   target_compile_definitions(ddr5_flags INTERFACE NDEBUG)
 else()
-  target_compile_options(ddr5_flags INTERFACE -O2 -mavx2 -Wall -Wextra)
+  if(DDR5_SANITIZE)
+    # -O1 -g keeps the reports readable and the run fast enough; undefined behaviour must fail the run, not just print.
+    target_compile_options(ddr5_flags INTERFACE -O1 -g -fno-omit-frame-pointer -fsanitize=${DDR5_SANITIZE} -mavx2 -Wall -Wextra)
+    target_link_options(ddr5_flags INTERFACE -fsanitize=${DDR5_SANITIZE})
+    if(DDR5_SANITIZE MATCHES "undefined")
+      target_compile_options(ddr5_flags INTERFACE -fno-sanitize-recover=undefined)
+      target_link_options(ddr5_flags INTERFACE -fno-sanitize-recover=undefined)
+    endif()
+  else()
+    target_compile_options(ddr5_flags INTERFACE -O2 -mavx2 -Wall -Wextra)
+  endif()
   set(THREADS_PREFER_PTHREAD_FLAG ON)
   find_package(Threads REQUIRED)
   target_link_libraries(ddr5_flags INTERFACE Threads::Threads)
@@ -45,6 +68,7 @@ set(ENGINE_SOURCES
   src/algo_pagemix.cpp
   src/algo_probe.cpp
   src/algo_rwstorm.cpp
+  src/flush.cpp
   src/gen.cpp
   src/log.cpp
   src/order.cpp

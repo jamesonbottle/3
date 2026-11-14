@@ -1,6 +1,7 @@
 // algo_rwstorm.cpp - concurrent read + write traffic on the same memory.
 #include "algo.h"
 #include "gen.h"
+#include "inject.h"
 #include "lineio.h"
 #include "log.h"
 #include "order.h"
@@ -38,7 +39,7 @@ RwstormOpts RwstormOpts::from(const Params& P, const Logger& log) {
 void algo_rwstorm(Run& R, const Params& P) {
     auto vars = build_vars(P, R.salt, R.rng, R.log);
     const RwstormOpts opt = RwstormOpts::from(P, R.log);
-    const OrderSpec &wo = opt.write, &vo = opt.verify;
+    const OrderSpec &wo = opt.write, &vo = opt.verify; // wo / vo: write order and verify order
     u64 wl = R.window_lines(P);
     struct Job {
         std::string label;
@@ -61,6 +62,7 @@ void algo_rwstorm(Run& R, const Params& P) {
             bool writer = (tid % 2) == 0;
             int partner = writer ? tid : tid - 1;
             View w = R.view(tid, wl, base + ji), pv = R.view(partner, wl, base + ji);
+            // ow / ov: rewrite own chunk, verify the partner's; of: sequential walk for the fill and the final check
             Order ow, ov, of;
             ow.init(wo.k, w.n, j.stride, 3 + ji, R.salt);
             ov.init(vo.k, pv.n, j.stride, 9 + ji, R.salt);
@@ -68,16 +70,17 @@ void algo_rwstorm(Run& R, const Params& P) {
             dispatch(opt.width, opt.nt, opt.flush, [&](auto Wc, auto NTc, auto FLc) {
                 using io = IO<decltype(Wc)::value, decltype(NTc)::value, decltype(FLc)::value>;
                 auto wr = [&](u64 i) {
-                    u8* a = w.base + i * 64;
+                    u8* a = w.base + i * kLineBytes;
                     Line l;
                     j.g->make(w.g + i, a, false, l);
                     io::store(a, l);
                 };
                 auto rd = [&](const View& v) {
                     return [&, v](u64 i) {
-                        const u8* a = v.base + i * 64;
+                        const u8* a = v.base + i * kLineBytes;
                         Line e, act;
                         j.g->make(v.g + i, a, false, e);
+                        DDR5_INJECT(rwstorm_read_fault, tid, ji, i, e);
                         R.vtick();
                         if (!io::verify(a, e, act))
                             R.report(tid, a, e, act, "rwstorm-read");
@@ -94,6 +97,7 @@ void algo_rwstorm(Run& R, const Params& P) {
                 }
                 _mm_sfence();
                 R.sync();
+                DDR5_INJECT(rwstorm_before_final, tid, ji, w);
                 walk(R, of, false, rd(w)); // final check of own chunk
             });
             R.sync();

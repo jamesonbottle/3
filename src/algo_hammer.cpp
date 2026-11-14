@@ -44,7 +44,7 @@ void algo_hammer(Run& R, const Params& P) {
         for (u64 s : opt.rowstride)
             for (u64 a : opt.aggressors)
                 jobs.push_back({v.label + " rowstride=" + std::to_string(s) + "B " + std::to_string(a) + "-sided", &v.g,
-                                std::max<u64>(1, s / 64), a});
+                                std::max<u64>(1, s / kLineBytes), a});
     u64 base = R.winctr[R.testName];
     R.winctr[R.testName] += jobs.size();
     R.parallel([&](int tid) {
@@ -58,12 +58,15 @@ void algo_hammer(Run& R, const Params& P) {
             View w = R.view(tid, wl, base + ji);
             using io = IO<32, 0, 1>;
             for (u64 i = 0; i < w.n; i++) {
-                u8* a = w.base + i * 64;
+                u8* a = w.base + i * kLineBytes;
                 Line l;
                 j.g->make(w.g + i, a, false, l);
                 io::store(a, l);
-                if (((i + 1) & 0xFFFF) == 0)
+                if (((i + 1) & 0xFFFF) == 0) {
                     R.tick();
+                    if (R.stop.load(std::memory_order_relaxed))
+                        break; // the rounds and the victim check below are skipped too: the data is only partly written
+                }
             }
             R.sync();
             u64 span = 2 * (j.A - 1) * j.sL + 1;
@@ -73,7 +76,7 @@ void algo_hammer(Run& R, const Params& P) {
                     u64 b0 = rng % (w.n - span);
                     std::vector<u8*> ag;
                     for (u64 k = 0; k < j.A; k++)
-                        ag.push_back(w.base + (b0 + 2 * k * j.sL) * 64);
+                        ag.push_back(w.base + (b0 + 2 * k * j.sL) * kLineBytes);
                     for (u8* a : ag) {
                         Line l;
                         j.g->make(0, a, true, l);
@@ -85,19 +88,21 @@ void algo_hammer(Run& R, const Params& P) {
                             _mm_clflush(a);
                         }
                         _mm_mfence();
+                        if ((it & 0x3FFF) == 0x3FFF && R.stop.load(std::memory_order_relaxed))
+                            break; // the aggressors are restored below; the victim check is skipped after a stop
                     }
                     for (size_t k = 0; k < ag.size(); k++) {
-                        u64 i = (ag[k] - w.base) / 64;
+                        u64 i = (ag[k] - w.base) / kLineBytes;
                         Line l;
                         j.g->make(w.g + i, ag[k], false, l);
                         io::store(ag[k], l);
                     }
-                    R.add_done(opt.acts * j.A * 64);
+                    R.add_done(opt.acts * j.A * kLineBytes);
                 }
             }
             R.sync();
             for (u64 i = 0; i < w.n && !R.stop; i++) {
-                const u8* a = w.base + i * 64;
+                const u8* a = w.base + i * kLineBytes;
                 Line e, act;
                 j.g->make(w.g + i, a, false, e);
                 R.vtick();

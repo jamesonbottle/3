@@ -7,15 +7,29 @@
 #include <functional>
 #include <map>
 #include <sstream>
+#include <thread>
+#include <mutex>
+#include <atomic>
+#include <chrono>
 #include "algo.h"
+#include "flush.h"
+#include "lineio.h"
 #include "gen.h"
 #include "log.h"
 #include "order.h"
 #include "params.h"
 #include "run.h"
 #include "seed.h"
+#include "stop_gate.h"
 #include "suite.h"
 #include "types.h"
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h> // SetThreadExecutionState, to look at the state keep_awake() sets
+#endif
 
 using namespace ddr5;
 
@@ -109,8 +123,17 @@ static void test_windows() {
 // The 'sat' pattern table: every selectable (pattern, width) pair yields a non-empty, finite pattern and inverse data
 // is the exact complement.
 static void test_generators() {
-    for (auto& sp : sat_table())
-        CHECK(sp.len >= 1 && sp.len <= 64, "pattern %s len=%d", sp.name, sp.len);
+    for (auto& sp : sat_table()) {
+        CHECK(sp.len >= 1 && sp.len <= 64 && !(sp.len & (sp.len - 1)), "pattern %s len=%d (must be a power of two)",
+              sp.name, sp.len);
+        // the mask in sat_word must give exactly what the plain modulo of the pattern's definition gives
+        u64 bad = 0;
+        for (int rep = 0; rep < 4; rep++)
+            for (u64 idx = 0; idx < 4096; idx++)
+                bad += sat_word(sp, idx, rep) != sp.w[(idx >> rep) % (u64)sp.len];
+        CHECK(!bad, "pattern %s: sat_word differs from the modulo form in %llu cases", sp.name,
+              (unsigned long long)bad);
+    }
     Gen g;
     g.kind = 1;
     g.seed = 99;
@@ -118,7 +141,7 @@ static void test_generators() {
     g.make(7, nullptr, false, a);
     g.make(7, nullptr, false, b);
     g.make(7, nullptr, true, c);
-    bool same = !memcmp(&a, &b, 64), comp = true;
+    bool same = !memcmp(&a, &b, kLineBytes), comp = true;
     for (int j = 0; j < 8; j++)
         comp &= (c.w[j] == ~a.w[j]);
     CHECK(same, "hash data must be a pure function of the line index");
@@ -137,6 +160,7 @@ static void test_generators() {
 // samples put the noise at ~0.006, so 0.06 cannot fail by chance.
 static void test_mixers() {
     const char* names[] = {"splitmix64", "murmur3 fmix64", "xorshift64*"};
+    const Rng rngs[] = {Rng::SplitMix, Rng::Murmur, Rng::XorShift};
     const int N = 8192;
     static u32 cnt[64][64];
     for (int mode = 0; mode < 3; mode++) {
@@ -144,9 +168,9 @@ static void test_mixers() {
         u64 rs = 0x1234;
         for (int n = 0; n < N; n++) {
             rs = splitmix(rs);
-            u64 h0 = mix64(rs, mode);
+            u64 h0 = mix64(rs, rngs[mode]);
             for (int i = 0; i < 64; i++) {
-                u64 d = h0 ^ mix64(rs ^ (1ull << i), mode);
+                u64 d = h0 ^ mix64(rs ^ (1ull << i), rngs[mode]);
                 for (int j = 0; j < 64; j++)
                     cnt[i][j] += (d >> j) & 1;
             }
@@ -182,7 +206,7 @@ static void test_seed() {
     auto sig = [&](u64 seed, u64 loop) {
         u64 salt = salt_for(seed, loop);
         Sig s;
-        for (auto& v : build_vars(p, salt, 0, test_log))
+        for (auto& v : build_vars(p, salt, Rng::Default, test_log))
             s.hash.push_back(v.g.seed);
         Order o;
         o.init(Order::RANDOM, 5000, 1, 1, salt);
@@ -228,22 +252,50 @@ static void test_evolve() {
         CHECK(hist[per] > lines / maxp * 3 / 4 && hist[per] < lines / maxp * 5 / 4,
               "period %llu chosen by %llu of %llu lines (expected ~%llu)", (unsigned long long)per,
               (unsigned long long)hist[per], (unsigned long long)lines, (unsigned long long)(lines / maxp));
+    // The per-pass table (EvoPass) must give exactly the direct arithmetic, with the table (maxp <= kMax) and without
+    // it (the fallback above kMax), and every period must stay inside 1..maxp for any maxp, including 1.
+    for (u64 mp : {(u64)1, (u64)2, (u64)8, EvoPass::kMax, EvoPass::kMax + 1, (u64)5000}) {
+        EvoPass ep;
+        ep.init(seed, mp);
+        CHECK(ep.tab == (mp <= EvoPass::kMax), "maxp %llu: table mode is wrong", (unsigned long long)mp);
+        u64 bad = 0, outside = 0;
+        for (u64 pass = 0; pass <= 40; pass++) {
+            ep.set(pass);
+            for (u64 per = 1; per <= mp; per += (mp > 64 ? 37 : 1)) {
+                Line a{}, b{};
+                bad += ep.is_due(per) != (pass % per == 0);
+                bad += ep.key(per) != evo_key(seed, pass / per);
+                evo_make_k(11, ep.key(per), Rng::SplitMix, a);
+                evo_make(11, pass / per, seed, Rng::SplitMix, b);
+                bad += memcmp(&a, &b, kLineBytes) != 0;
+            }
+        }
+        for (u64 g = 0; g < 5000; g++) {
+            u64 per = evo_period(g, seed, mp);
+            outside += per < 1 || per > mp;
+        }
+        CHECK(!bad, "maxp %llu: EvoPass differs from the direct arithmetic in %llu cases", (unsigned long long)mp,
+              (unsigned long long)bad);
+        CHECK(!outside, "maxp %llu: %llu periods outside 1..maxp", (unsigned long long)mp, (unsigned long long)outside);
+    }
+    const Rng rngs[] = {Rng::SplitMix, Rng::Murmur, Rng::XorShift};
     for (int mode = 0; mode < 3;
          mode++) { // the data follows the selected RNG, so every mixer must keep (line, generation) pairs apart
         std::set<u64> seen;
         Line a{}, b{}, c{};
-        evo_make(7, 3, seed, mode, a);
-        evo_make(7, 3, seed, mode, b);
-        evo_make(7, 2, seed, mode, c);
-        CHECK(!memcmp(&a, &b, 64), "rng %d: evolving data must be a pure function of (line, generation, seed)", mode);
-        CHECK(memcmp(&a, &c, 64) != 0,
+        evo_make(7, 3, seed, rngs[mode], a);
+        evo_make(7, 3, seed, rngs[mode], b);
+        evo_make(7, 2, seed, rngs[mode], c);
+        CHECK(!memcmp(&a, &b, kLineBytes), "rng %d: evolving data must be a pure function of (line, generation, seed)",
+              mode);
+        CHECK(memcmp(&a, &c, kLineBytes) != 0,
               "rng %d: the previous generation must differ from the new one (otherwise a lost write goes unseen)",
               mode);
         size_t dup = 0;
         for (u64 g = 0; g < 500; g++)
             for (u64 gen = 0; gen < 16; gen++) {
                 Line l{};
-                evo_make(g, gen, seed, mode, l);
+                evo_make(g, gen, seed, rngs[mode], l);
                 dup += !seen.insert(l.w[0]).second;
             }
         CHECK(!dup, "rng %d: %zu (line, generation) pairs produced the same first qword", mode, dup);
@@ -260,12 +312,12 @@ static void test_suite_parses() {
         quick += t.p.flag("quick", false);
     CHECK(quick == 12, "expected 12 quick tests, got %zu", quick);
     for (auto& t : tests) {
-        std::string algo = lower(t.p.str("algo", "fill"));
+        const std::string algo = t.algo();
         CHECK(algos().count(algo) == 1, "test '%s': unknown algo '%s'", t.name.c_str(), algo.c_str());
         if (algo == "fill" || algo == "march" || algo == "rwstorm" || algo == "evolve" || algo == "copy" ||
             algo == "chase")
-            CHECK(!build_vars(t.p, 0, 0, test_log).empty(), "test '%s': no data variants (typo in data/style/pattern?)",
-                  t.name.c_str());
+            CHECK(!build_vars(t.p, 0, Rng::Default, test_log).empty(),
+                  "test '%s': no data variants (typo in data/style/pattern?)", t.name.c_str());
         if (algo == "march")
             CHECK(!parse_march_variants(t.p.str("march"), test_log).empty(), "test '%s': march parses to nothing",
                   t.name.c_str());
@@ -279,7 +331,7 @@ static void test_suite_keys() {
     for (auto& t : tests)
         for (auto& k : unknown_keys(t))
             CHECK(false, "test '%s': key '%s' is not read by algo '%s' (typo in suite_data.cpp?)", t.name.c_str(),
-                  k.c_str(), t.p.str("algo", "fill").c_str());
+                  k.c_str(), t.algo().c_str());
     for (auto& a : algos())
         CHECK(!algo_keys(a.first).empty() && algo_keys(a.first).count("algo"), "algo '%s' has no key list",
               a.first.c_str());
@@ -304,6 +356,150 @@ static void test_suite_keys() {
               "pagemix test: wrong key report");
         CHECK(unknown_keys(t2[2]) == std::vector<std::string>({"widht"}), "chase test: wrong key report");
     }
+}
+
+// --cache (Settings::cacheMode) must reach every algo that has a flush / nt key, evolve included, and must not add the
+// key to an algo that lacks it. Checked over the whole built-in suite for each of the three overriding modes.
+// The flush instruction is chosen once per run: Auto / ClFlushOpt use CLFLUSHOPT exactly when the CPU reports it,
+// ClFlush never does, and --cache bypass style accesses (IO<..., FL=1>) keep the data intact in every mode.
+static void test_flush_mode() {
+    const bool has = cpu_has_clflushopt();
+    set_flush_mode(FlushMode::ClFlush);
+    CHECK(!flush_uses_opt() && !strcmp(flush_mode_name(), "CLFLUSH"), "ClFlush must force plain CLFLUSH");
+    set_flush_mode(FlushMode::Auto);
+    CHECK(flush_uses_opt() == has, "Auto must use CLFLUSHOPT iff the CPU has it (cpu=%d)", (int)has);
+    set_flush_mode(FlushMode::ClFlushOpt);
+    CHECK(flush_uses_opt() == has, "ClFlushOpt must fall back to CLFLUSH on a CPU without it (cpu=%d)", (int)has);
+    CHECK(!strcmp(flush_mode_name(), has ? "CLFLUSHOPT" : "CLFLUSH"), "mode name does not match the instruction used");
+    for (FlushMode m : {FlushMode::ClFlush, FlushMode::Auto}) {
+        set_flush_mode(m);
+        using io = IO<32, 0, 1>; // an alias: a comma inside CHECK(...) would split the macro arguments
+        alignas(64) Line mem[4];
+        for (int i = 0; i < 4; i++) {
+            Line e;
+            for (int k = 0; k < 8; k++)
+                e.w[k] = splitmix(i * 8 + k);
+            io::store(&mem[i], e);
+            Line act;
+            CHECK(io::verify(&mem[i], e, act), "mode %d: flushed store/verify of line %d failed", (int)m, i);
+            e.w[3] ^= 1;
+            CHECK(!io::verify(&mem[i], e, act) && act.w[3] == (e.w[3] ^ 1),
+                  "mode %d: a wrong expectation must be reported with the data actually read", (int)m);
+        }
+    }
+    set_flush_mode(FlushMode::Auto);
+}
+
+static void test_cache_override() {
+    const struct {
+        CacheMode mode;
+        const char* flush;
+        const char* nt;
+        const char* name;
+    } modes[] = {{CacheMode::Bypass, "1", "0", "bypass"},
+                 {CacheMode::Cached, "0", "0", "cached"},
+                 {CacheMode::NonTemporal, "0", "1", "nt"}};
+    std::set<std::string> seenFlush, seenNt; // algos that took part, to show the check is not vacuous
+    for (const auto& m : modes) {
+        Settings s;
+        s.cacheMode = m.mode;
+        std::vector<TestDef> sel = select_tests(s, builtin_suite());
+        CHECK(sel.size() == 28, "--cache %s: expected all 28 tests selected, got %zu", m.name, sel.size());
+        for (auto& t : sel) {
+            const std::string algo = t.algo();
+            const auto& keys = algo_keys(algo);
+            if (keys.count("flush")) {
+                seenFlush.insert(algo);
+                CHECK(t.p.str("flush") == m.flush, "--cache %s: test '%s' (algo %s) has flush='%s', expected '%s'",
+                      m.name, t.name.c_str(), algo.c_str(), t.p.str("flush").c_str(), m.flush);
+            }
+            if (keys.count("nt")) {
+                seenNt.insert(algo);
+                CHECK(t.p.str("nt") == m.nt, "--cache %s: test '%s' (algo %s) has nt='%s', expected '%s'", m.name,
+                      t.name.c_str(), algo.c_str(), t.p.str("nt").c_str(), m.nt);
+            }
+            // an algo without the key must not gain it from the override (kDefaults may give it flush, so only nt is
+            // checked for absence when the test did not set it itself)
+            if (!keys.count("nt"))
+                CHECK(!t.p.has("nt"), "--cache %s: test '%s' (algo %s) gained an nt key it does not read", m.name,
+                      t.name.c_str(), algo.c_str());
+        }
+    }
+    for (const char* a : {"fill", "march", "rwstorm", "evolve"}) {
+        CHECK(seenFlush.count(a), "--cache check never saw algo '%s' with a flush key", a);
+        CHECK(seenNt.count(a), "--cache check never saw algo '%s' with an nt key", a);
+    }
+
+    // Default leaves the suite's own values alone
+    Settings d;
+    std::vector<TestDef> base = builtin_suite(), sel = select_tests(d, builtin_suite());
+    for (size_t i = 0; i < sel.size() && i < base.size(); i++)
+        CHECK(sel[i].p.m == base[i].p.m, "--cache default changed the parameters of test '%s'", sel[i].name.c_str());
+}
+
+// algo_keys() (algo.cpp) holds, by hand, the keys the shared helpers build_vars(), stride_list() and
+// Run::window_lines() read. Record the keys those helpers really look up (Params::reads) and require every algo that
+// calls a helper to list each of its keys: a key added to a helper but not to the list would otherwise be reported as
+// "not used" at run time.
+static void test_shared_key_sets() {
+    using Cfg = std::map<std::string, std::string>;
+    auto record = [](const std::function<void(const Params&)>& call) {
+        std::set<std::string> seen;
+        Params p;
+        p.reads = &seen;
+        call(p);
+        return seen;
+    };
+    // build_vars reads other keys in each data mode, so drive every branch (each config sets all the keys of its
+    // branch)
+    const std::vector<Cfg> dataCfgs = {{{"data", "sat"}, {"sat_width", "32 64"}, {"seed", "1"}},
+                                       {{"data", "hash"}, {"seed", "1"}, {"seeds", "2"}},
+                                       {{"data", "addr"}, {"seed", "1"}, {"seeds", "2"}},
+                                       {{"style", "victim"}, {"victims", "1 2"}, {"altshift", "1"}, {"modulo", "2"}},
+                                       {{"pattern", "0x1"}, {"altshift", "1"}, {"modulo", "2"}}};
+    std::set<std::string> vars, strides, windows;
+    for (const Cfg& c : dataCfgs) {
+        std::set<std::string> seen = record([&](const Params& q) {
+            Params p = q; // copies the recorder pointer
+            p.m = c;
+            build_vars(p, 0, Rng::Default, test_log);
+        });
+        vars.insert(seen.begin(), seen.end());
+    }
+    strides = record([](const Params& q) {
+        Params p = q;
+        p.m["stride"] = "4K";
+        stride_list(p, true);
+    });
+    windows = record([](const Params& q) {
+        Params p = q;
+        p.m["window_mb"] = "64";
+        Run R(test_log);
+        R.layout.T = 1;
+        R.window_lines(p);
+    });
+    // a recorder that saw nothing (or missed the obvious keys) would make every check below pass for no reason
+    CHECK(vars.count("data") && vars.count("seeds") && vars.count("victims") && vars.count("modulo"),
+          "build_vars key recorder missed keys it must see");
+    CHECK(strides.count("stride") && windows.count("window_mb"), "stride/window key recorder saw nothing");
+
+    // which algos call which helper (the algo_*.cpp files; see the comment at the top of each)
+    struct Use {
+        const char* helper;
+        const std::set<std::string>* keys;
+        std::vector<const char*> algos;
+    };
+    const Use uses[] = {
+        {"build_vars", &vars, {"fill", "march", "evolve", "rwstorm", "copy", "hammer"}},
+        {"stride_list", &strides, {"fill", "march", "evolve", "rwstorm"}},
+        {"Run::window_lines", &windows, {"fill", "march", "evolve", "rwstorm", "copy", "hammer", "chase"}},
+    };
+    for (const Use& u : uses)
+        for (const char* a : u.algos)
+            for (const std::string& k : *u.keys)
+                CHECK(algo_keys(a).count(k),
+                      "algo '%s' calls %s, which reads key '%s', but algo_keys() does not list it", a, u.helper,
+                      k.c_str());
 }
 
 // Every key an XOpts lists must change what XOpts::from() returns (a stale entry would hide a typo of that key), and
@@ -614,6 +810,583 @@ static void test_coherency_opts() {
                     [](const Params& q) { return coherency_sig(CoherencyOpts::from(q)); });
 }
 
+// Values, not only keys: a typo such as "4KB" or "ture" must be reported, never silently turned into a number or false.
+static void test_values() {
+    struct Good {
+        const char* s;
+        u64 v;
+    };
+    const Good good[] = {{"4K", 4096},
+                         {"2M", 2ull << 20},
+                         {"1g", 1ull << 30},
+                         {"0x10", 16},
+                         {"0XfF", 255},
+                         {" 7 ", 7},
+                         {"0", 0},
+                         {"18446744073709551615", ~0ull},
+                         {"0xFFFFFFFFFFFFFFFF", ~0ull},
+                         {"17179869183G", 17179869183ull << 30}};
+    for (auto& g : good) {
+        u64 v = 12345;
+        CHECK(pnum_checked(g.s, v) && v == g.v, "pnum_checked('%s') must give %llu", g.s, (unsigned long long)g.v);
+        CHECK(pnum(g.s) == g.v, "pnum('%s') changed for a valid value", g.s);
+    }
+    const char* bad[] = {"",
+                         " ",
+                         "4KB",
+                         "abc",
+                         "0x",
+                         "0xG1",
+                         "1.5G",
+                         "-1",
+                         "+1",
+                         "99999999999999999999",
+                         "0x10000000000000000",
+                         "17179869184G",
+                         "18446744073709551615K",
+                         "K",
+                         "1 2",
+                         "0x10K"};
+    for (const char* b : bad) {
+        u64 v = 777;
+        CHECK(!pnum_checked(b, v), "pnum_checked('%s') must reject it", b);
+        CHECK(pnum(b) == 0, "pnum('%s') must give 0 for a bad value", b);
+    }
+
+    Params p;
+    p.test = "demo";
+    p.m["n"] = "4KB";
+    p.m["ok"] = "4K";
+    p.m["f1"] = "ture";
+    p.m["f2"] = "Yes";
+    p.m["f3"] = "off";
+    p.m["list"] = "4K 12x 2M";
+    CHECK(p.num("ok", 1) == 4096 && p.bad.empty(), "a valid number must not be recorded as bad");
+    CHECK(p.flag("f2", false) && !p.flag("f3", true) && p.bad.empty(), "yes/off are valid flags");
+    CHECK(p.num("n", 9) == 0 && p.bad.size() == 1, "a bad number must read as 0 and be recorded");
+    CHECK(!p.flag("f1", true) && p.bad.size() == 2, "a misspelled flag must read as false and be recorded");
+    CHECK(p.nums("list").size() == 3 && p.bad.size() == 3, "one bad item of a list must be recorded");
+    CHECK(p.bad[0].find("test 'demo': key 'n': '4KB'") == 0, "message must name test, key and value: %s",
+          p.bad[0].c_str());
+
+    // the whole built-in suite is clean, and bad_values() sees the usual mistakes
+    for (auto& t : builtin_suite())
+        for (auto& m : bad_values(t))
+            CHECK(false, "built-in suite: %s", m.c_str());
+    auto mk = [](const char* algo, const char* k, const char* v) {
+        TestDef t;
+        t.name = "bad-demo";
+        t.p.m["algo"] = algo;
+        t.p.m[k] = v;
+        return t;
+    };
+    struct Case {
+        const char* algo;
+        const char* key;
+        const char* val;
+        const char* expect; // text the report must contain
+    };
+    const Case cases[] = {
+        {"evolve", "passes", "4KB", "key 'passes': '4KB'"},
+        {"fill", "nt", "ture", "key 'nt': 'ture'"},
+        {"fill", "order", "bogus", "unknown address order 'bogus'"},
+        {"march", "march", "u(w0) D(abc)", "bad march element 'D(abc)'"},
+        {"march", "march", "u(w0) X(r1.5)", "bad march element 'X(r1.5)'"},
+        {"fill", "stride", "4K 1.5G", "key 'stride': '1.5G'"},
+        {"fill", "window_mb", "-1", "key 'window_mb': '-1'"},
+        {"fill", "pattern", "0xZZ", "key 'pattern': '0xZZ'"},
+        {"hammer", "acts", "99999999999999999999", "key 'acts'"},
+        {"coherency", "seconds", "3s", "key 'seconds': '3s'"},
+    };
+    for (auto& c : cases) {
+        std::vector<std::string> r = bad_values(mk(c.algo, c.key, c.val));
+        bool found = false;
+        for (auto& m : r)
+            found = found || (m.find(c.expect) != std::string::npos && m.find("test 'bad-demo'") != std::string::npos);
+        CHECK(found, "%s %s=%s: bad_values must report '%s' with the test name (got %zu message(s): %s)", c.algo, c.key,
+              c.val, c.expect, r.size(), r.empty() ? "" : r[0].c_str());
+    }
+}
+
+// Exceptions: nothing that goes wrong in a worker or in run_suite's own code may end in std::terminate (a throw leaving
+// a thread function, or a joinable std::thread destroyed during unwinding). Reaching the end of these tests IS the
+// check.
+static void test_exceptions() {
+    Logger lg;
+    lg.sink = [](const std::string&) {
+    };
+    { // a worker throws: the others finish, the exception comes out of parallel() on the calling thread
+        Run R(lg);
+        R.layout.T = 3;
+        std::atomic<int> finished{0};
+        bool caught = false;
+        std::string what;
+        try {
+            R.parallel([&](int tid) {
+                if (tid == 1)
+                    throw std::runtime_error("boom 1");
+                finished++;
+            });
+        } catch (const std::exception& e) {
+            caught = true;
+            what = e.what();
+        }
+        CHECK(caught && what == "boom 1", "parallel() must rethrow the worker's exception, got '%s'", what.c_str());
+        CHECK(finished == 2, "the other workers must finish, %d did", finished.load());
+        CHECK(R.stop.load(), "a failed worker must stop the run");
+    }
+    { // the partner is already waiting at the barrier when a worker throws: it must be released, not wait forever
+        Run R(lg);
+        R.layout.T = 2;
+        std::atomic<int> passed{0};
+        bool caught = false;
+        try {
+            R.parallel([&](int tid) {
+                if (tid == 1) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(100)); // tid 0 is in sync() by now
+                    throw std::runtime_error("boom 2");
+                }
+                R.sync();
+                passed++;
+            });
+        } catch (const std::exception&) {
+            caught = true;
+        }
+        CHECK(caught && passed == 1, "a thrower must release a worker waiting at the barrier (caught %d, passed %d)",
+              (int)caught, passed.load());
+    }
+    { // an exception deep inside run_suite, while FPU threads run and memory is allocated: exit code 3, nothing leaked
+        Settings st;
+        st.megabytes = 8;
+        st.threads = 2;
+        st.largePages = false;
+        st.stressFpu = true;
+        st.filter = "Bulk copy";
+        st.loops = 1;
+        std::string text;
+        bool thrown = false;
+        Logger sink;
+        sink.sink = [&](const std::string& t) {
+            if (!thrown && t.find("[loop") != std::string::npos) {
+                thrown = true;
+                throw std::runtime_error("boom 3"); // thrown from inside run_suite, after the allocation
+            }
+            text += t;
+        };
+        Run R(sink);
+        int rc = run_suite(st, R);
+        CHECK(thrown, "the test hook never fired");
+        CHECK(rc == 3, "an exception inside run_suite must give exit code 3, got %d", rc);
+        CHECK(text.find("internal error: boom 3") != std::string::npos, "the exception must be logged");
+        CHECK(R.layout.region == nullptr, "the region must be released on the exception path");
+    }
+}
+
+// Barrier protocol (G1, see run.h): the helper that compares the workers' sync() counts, and parallel() itself in the
+// two situations the debug check (DDR5_CHECK_SYNC) must tell apart. A run whose workers all make the same calls must
+// pass; a run that is stopped may let workers leave at different points and must NOT be reported. The violation itself
+// ends in std::abort, so it cannot be tested here: selftest.sh does it with the DDR5TEST_EXTRA_SYNC hook.
+static void test_sync_protocol() {
+    CHECK(sync_count_mismatch({}) == -1 && sync_count_mismatch({7}) == -1 && sync_count_mismatch({3, 3, 3}) == -1,
+          "equal counts (or no workers) are no mismatch");
+    CHECK(sync_count_mismatch({3, 3, 4}) == 2 && sync_count_mismatch({3, 2, 3}) == 1 &&
+              sync_count_mismatch({0, 1}) == 1,
+          "the first worker that differs from worker 0 is reported");
+    Logger lg;
+    lg.sink = [](const std::string&) {
+    };
+    { // every worker makes the same 5 calls: nothing to report, and the barrier must not hang
+        Run R(lg);
+        R.layout.T = 3;
+        std::atomic<int> done{0};
+        R.parallel([&](int) {
+            for (int i = 0; i < 5; i++)
+                R.sync();
+            done++;
+        });
+        CHECK(done == 3 && !R.stop.load(), "an unstopped run with equal sync counts must just finish (%d done)",
+              done.load());
+    }
+    { // worker 0 stops the run and leaves at once; the others still make two sync() calls. Rule 2: allowed, not
+      // reported
+        Run R(lg);
+        R.layout.T = 3;
+        std::atomic<int> passed{0};
+        R.parallel([&](int tid) {
+            if (tid == 0) {
+                R.stop = true;
+                return;
+            }
+            R.sync();
+            R.sync();
+            passed++;
+        });
+        CHECK(passed == 2 && R.stop.load(),
+              "workers of a stopped run may make different numbers of sync() calls (%d passed)", passed.load());
+    }
+}
+
+// Locking the region in slices (B1, platform.h). First the slicing logic with a fake lock function: the slices must
+// tile [0, bytes) exactly, Stop must end it before the next slice, and a failure must end it too. Then plat::alloc
+// itself with Stop already raised (the real mlock / VirtualLock path): it must return usable memory, not locked, saying
+// why. A lock of many GB that is cut short in the middle cannot be run here, so the fake lock function stands in for
+// it.
+static void test_lock_slices() {
+    using plat::lock_in_slices;
+    using plat::LockProgress;
+    struct Call {
+        u64 off, n;
+    };
+    // (bytes, slice): exact multiple, short last slice, smaller than one slice, one byte, slice 0 = one slice, nothing
+    const u64 cases[][2] = {{1200, 300}, {1000, 300}, {100, 300}, {1, 1}, {1000, 0}, {0, 300}};
+    for (const auto& c : cases) {
+        const u64 bytes = c[0], slice = c[1] ? c[1] : c[0];
+        std::vector<u8> mem(bytes + 1);
+        std::vector<Call> calls;
+        const LockProgress r = lock_in_slices(mem.data(), bytes, nullptr, c[1], [&](u8* p, u64 n) {
+            calls.push_back({(u64)(p - mem.data()), n});
+            return true;
+        });
+        u64 next = 0;
+        bool tiled = true;
+        for (const Call& k : calls) {
+            tiled = tiled && k.off == next && k.n >= 1 && k.n <= slice;
+            next += k.n;
+        }
+        const u64 want = bytes ? (bytes + slice - 1) / slice : 0;
+        CHECK(tiled && next == bytes && calls.size() == want && r.done == bytes && !r.failed && !r.stopped,
+              "bytes=%llu slice=%llu: %zu calls (want %llu), covered %llu, done %llu, tiled=%d",
+              (unsigned long long)bytes, (unsigned long long)c[1], calls.size(), (unsigned long long)want,
+              (unsigned long long)next, (unsigned long long)r.done, (int)tiled);
+    }
+    std::vector<u8> mem(1000);
+    { // Stop raised during the 2nd slice: that slice is finished, the 3rd is never started
+        std::atomic<bool> stop{false};
+        int calls = 0;
+        const LockProgress r = lock_in_slices(mem.data(), 1000, &stop, 300, [&](u8*, u64) {
+            if (++calls == 2)
+                stop = true;
+            return true;
+        });
+        CHECK(calls == 2 && r.done == 600 && r.stopped && !r.failed, "stop in slice 2: %d calls, done %llu, stopped=%d",
+              calls, (unsigned long long)r.done, (int)r.stopped);
+    }
+    { // Stop already raised: nothing is locked
+        std::atomic<bool> stop{true};
+        int calls = 0;
+        const LockProgress r = lock_in_slices(mem.data(), 1000, &stop, 300, [&](u8*, u64) {
+            calls++;
+            return true;
+        });
+        CHECK(calls == 0 && r.done == 0 && r.stopped && !r.failed, "stop before the first slice: %d calls", calls);
+    }
+    { // Stop raised by the LAST slice: everything is locked, so the run was not cut short
+        std::atomic<bool> stop{false};
+        const LockProgress r = lock_in_slices(mem.data(), 1000, &stop, 250, [&](u8* p, u64) {
+            if (p == mem.data() + 750)
+                stop = true;
+            return true;
+        });
+        CHECK(r.done == 1000 && !r.stopped && !r.failed, "stop in the last slice: done %llu, stopped=%d",
+              (unsigned long long)r.done, (int)r.stopped);
+    }
+    { // the 3rd slice fails: the first two stay locked and are reported, nothing after the failure is attempted
+        int calls = 0;
+        const LockProgress r = lock_in_slices(mem.data(), 1000, nullptr, 300, [&](u8*, u64) { return ++calls != 3; });
+        CHECK(calls == 3 && r.done == 600 && r.failed && !r.stopped, "failure in slice 3: %d calls, done %llu", calls,
+              (unsigned long long)r.done);
+    }
+    const u64 bytes = 16ull << 20;
+    { // the real allocation with Stop already raised: usable memory back, not locked, and the note says why
+        std::atomic<bool> stop{true};
+        bool got = true, locked = true;
+        std::string note;
+        void* p = plat::alloc(bytes, false, got, locked, note, &stop);
+        CHECK(p != nullptr && !got && !locked && note.find("stopped") != std::string::npos,
+              "alloc with stop raised: p=%p got=%d locked=%d note='%s'", p, (int)got, (int)locked, note.c_str());
+        if (p) {
+            memset(p, 0xA5, bytes);
+            plat::release(p, bytes);
+        }
+    }
+    { // and without it (no limit on locked memory is promised here): it either locks or explains why it did not
+        std::atomic<bool> stop{false};
+        bool got = true, locked = false;
+        std::string note;
+        void* p = plat::alloc(bytes, false, got, locked, note, &stop);
+        CHECK(p != nullptr && !got && (locked || !note.empty()) && note.find("stopped") == std::string::npos,
+              "alloc without stop: p=%p got=%d locked=%d note='%s'", p, (int)got, (int)locked, note.c_str());
+        if (p) {
+            memset(p, 0x5A, bytes);
+            plat::release(p, bytes);
+        }
+    }
+}
+
+// FPU stress kernel (D6). Left alone, x = x * m + k grows by ~1.2e-7 per step and a register reaches +inf after ~8e8
+// steps
+// (~40,100 outer loops), after which it never changes again. The kernel re-seeds the registers every kFpuReseedLoops
+// outer loops, so the whole run is periodic: if two and a half periods stay finite, bounded and changing on EVERY outer
+// loop, and the state is back at the start after each full period, an unbounded run does too (a fast proof; running
+// past 40,100 loops would take seconds).
+static void test_fpu_kernel() {
+    FpuKernel K;
+    float start[8][8], prev[8][8];
+    memcpy(start, K.v, sizeof start);
+    bool finite = true, changing = true, periodic = true;
+    float maxv = 0;
+    for (u64 n = 1; n <= 2 * kFpuReseedLoops + kFpuReseedLoops / 2; n++) {
+        memcpy(prev, K.v, sizeof prev);
+        K.run(1);
+        for (int i = 0; i < 8; i++) {
+            if (K.v[i][0] == prev[i][0])
+                changing = false; // register i did not change in a whole outer loop
+            for (int l = 0; l < 8; l++) {
+                if (!std::isfinite(K.v[i][l]))
+                    finite = false;
+                maxv = std::max(maxv, std::fabs(K.v[i][l]));
+            }
+        }
+        if (n % kFpuReseedLoops == 0 && memcmp(K.v, start, sizeof start) != 0)
+            periodic = false;
+    }
+    CHECK(finite, "an FPU register left the finite range");
+    CHECK(changing, "an FPU register stopped changing");
+    CHECK(maxv < 100.0f, "FPU values must stay small (max %g)", (double)maxv);
+    CHECK(periodic, "the kernel must be back at its start state after kFpuReseedLoops outer loops");
+    CHECK(std::isfinite(K.sink()) && K.sink() > 0.0f, "FpuKernel::sink() must be a finite positive number");
+    FpuKernel A, B; // run(a) + run(b) is the same as run(a + b): the state really is carried in v
+    A.run(7);
+    B.run(3);
+    B.run(4);
+    CHECK(memcmp(A.v, B.v, sizeof A.v) == 0 && A.loops == B.loops, "run() must carry its state between calls");
+}
+
+// Run lifecycle seen from the front-end side: status() may be polled from another thread while run_suite works (the GUI
+// does exactly this; run it under TSan, see S12), and a Stop that arrives before the run starts must not be lost.
+static void test_run_status() {
+    Settings st;
+    st.megabytes = 8;
+    st.threads = 2;
+    st.largePages = false;
+    st.filter = "Bulk copy";
+    st.loops = 1; // 0 would mean "until stopped"
+    st.testSeconds = 1;
+    st.seedSet = true;
+    st.seed = 1;
+    std::mutex mu;
+    std::string text;
+    Logger lg;
+    lg.sink = [&](const std::string& t) {
+        std::lock_guard<std::mutex> l(mu);
+        text += t;
+    };
+    {
+        Run R(lg);
+        std::atomic<bool> done{false};
+        int rc = -1;
+        std::thread worker([&] {
+            rc = run_suite(st, R);
+            done = true;
+        });
+        bool sawRegion = false, sawStart = false;
+        u64 lastV = 0;
+        while (!done) {
+            Run::Status s = R.status();
+            sawRegion = sawRegion || s.regionBytes > 0;
+            sawStart = sawStart || s.tStart > 0;
+            CHECK(s.vtotal >= lastV, "coverage counter went backwards");
+            lastV = s.vtotal;
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+        worker.join();
+        Run::Status f = R.status();
+        CHECK(rc == 0, "run_suite on a clean run must return 0, got %d", rc);
+        CHECK(f.regionBytes == (8ull << 20) && f.tStart > 0 && f.errors == 0,
+              "final status wrong: region %llu start %.2f errors %llu", (unsigned long long)f.regionBytes, f.tStart,
+              (unsigned long long)f.errors);
+        CHECK(sawRegion || sawStart || f.regionBytes, "status never showed the run");
+    }
+    {
+        text.clear();
+        Run R(lg);
+        R.stop = true; // Stop pressed while the run is still starting up
+        int rc = run_suite(st, R);
+        CHECK(rc == 0, "run_suite with stop already set must return 0, got %d", rc);
+        CHECK(text.find("[loop") == std::string::npos, "a Stop requested before the start was lost: a test ran");
+    }
+}
+
+// Run::report and the Logger formatting helpers. The error block is built in a string that grows to fit (a fixed buffer
+// would cut a long test name and lose the qword lines after it, or overrun), and once the log holds maxLog blocks
+// report() still counts every error but writes nothing more.
+static void test_report() {
+    // appendf / emitf: output longer than any fixed buffer arrives whole
+    {
+        std::string s = "head:";
+        appendf(s, "%s|%d", std::string(5000, 'q').c_str(), 42);
+        CHECK(s == "head:" + std::string(5000, 'q') + "|42", "appendf lost or cut text (%zu bytes)", s.size());
+        std::string small;
+        appendf(small, "%d-%s", 7, "ab");
+        CHECK(small == "7-ab", "appendf short output wrong: '%s'", small.c_str());
+        std::string got;
+        Logger lg;
+        lg.sink = [&](const std::string& t) {
+            got = t;
+        };
+        lg.emitf("[%s]", std::string(3000, 'z').c_str());
+        CHECK(got == "[" + std::string(3000, 'z') + "]", "emitf cut a long message (%zu bytes)", got.size());
+    }
+    alignas(64) static u8 mem[64 * 8];
+    Line e, a; // worst case: every qword differs, in every bit
+    for (int j = 0; j < 8; j++) {
+        e.w[j] = 0x0123456789ABCDEFull * (u64)(j + 1);
+        a.w[j] = ~e.w[j];
+    }
+    // one error with a very long test name: the whole header and all 8 qword lines must be there, well formed
+    {
+        std::vector<std::string> blocks;
+        Logger lg;
+        lg.sink = [&](const std::string& t) {
+            blocks.push_back(t);
+        };
+        Run R(lg);
+        R.layout.region = mem;
+        const std::string name(3000, 'n');
+        R.set_label(name);
+        R.report(2, mem + 64, e, a, "verify", false);
+        CHECK(blocks.size() == 1, "one error must give one block, got %zu", blocks.size());
+        if (blocks.size() == 1) {
+            const std::string& b = blocks[0];
+            std::vector<std::string> lines;
+            std::stringstream ss(b);
+            for (std::string l; std::getline(ss, l);)
+                lines.push_back(l);
+            CHECK(!b.empty() && b.back() == '\n', "the block must end with a newline");
+            CHECK(lines.size() == 9, "header + 8 qword lines expected, got %zu lines", lines.size());
+            CHECK(!lines.empty() && lines[0].rfind("ERROR t=", 0) == 0 &&
+                      lines[0].find("test=\"" + name + "\" verify thr=2 ") != std::string::npos &&
+                      lines[0].find("bits=512 ") != std::string::npos &&
+                      lines[0].find("x8-codewords[1b/2b/3-4b/5+b]=0/0/0/4 (logical check") != std::string::npos,
+                  "header cut or malformed: '%.160s'", lines.empty() ? "" : lines[0].c_str());
+            for (int j = 0; j < 8 && (size_t)j + 1 < lines.size(); j++) {
+                char want[128];
+                snprintf(want, sizeof want, "      qword %d: exp=%016llX act=%016llX xor=%016llX", j,
+                         (unsigned long long)e.w[j], (unsigned long long)a.w[j], (unsigned long long)~0ull);
+                CHECK(lines[(size_t)j + 1] == want, "qword line %d wrong: '%s'", j, lines[(size_t)j + 1].c_str());
+            }
+        }
+        CHECK(R.error_count() == 1, "error_count %llu", (unsigned long long)R.error_count());
+    }
+    // 4 threads report 100 errors each: every error is counted, exactly maxLog blocks are written, none interleaved
+    {
+        const u64 maxLog = Cfg().maxLog;
+        std::vector<std::string> blocks; // the sink runs under the Run's lock, so it needs none of its own
+        Logger lg;
+        lg.sink = [&](const std::string& t) {
+            blocks.push_back(t);
+        };
+        Run R(lg);
+        R.layout.region = mem;
+        R.set_label("report storm");
+        R.layout.T = 4;
+        R.parallel([&](int tid) {
+            for (int i = 0; i < 100; i++)
+                R.report(tid, mem + 64 * (size_t)((tid + i) % 8), e, a, "verify", false);
+        });
+        CHECK(R.error_count() == 400, "every error must be counted, got %llu", (unsigned long long)R.error_count());
+        CHECK(blocks.size() == maxLog, "exactly maxLog (%llu) blocks must be written, got %zu",
+              (unsigned long long)maxLog, blocks.size());
+        for (const std::string& b : blocks)
+            if (b.rfind("ERROR t=", 0) != 0 || std::count(b.begin(), b.end(), '\n') != 9) {
+                CHECK(false, "a block is malformed or interleaved: '%.120s'", b.c_str());
+                break;
+            }
+    }
+}
+
+// StopGate (GUI Stop / close rules, B2): the UI never waits for the worker, a second click only forces after the delay,
+// close waits for the run's done message.
+static void test_stop_gate() {
+    using Act = StopGate::Act;
+    { // idle: close goes straight through, Stop does nothing (the GUI starts a run instead)
+        StopGate g(3.0);
+        CHECK(g.on_close(0) == Act::CloseNow, "close with no run must destroy the window");
+        CHECK(g.on_stop_click(0) == Act::None, "Stop with no run must do nothing");
+        CHECK(!g.tick(100), "no force offer without a run");
+    }
+    { // Stop: the first click asks, the second one within the delay is ignored, after the delay it forces
+        StopGate g(3.0);
+        g.on_run_start();
+        CHECK(g.running() && !g.stopping(), "state after start");
+        CHECK(g.on_stop_click(10) == Act::RequestStop && g.stopping(), "first Stop click must request the stop");
+        CHECK(g.on_stop_click(10.5) == Act::None, "second click inside the delay must be ignored (double click)");
+        CHECK(!g.tick(12.9) && !g.force_offered(), "no force offer before the delay");
+        CHECK(g.on_stop_click(12.9) == Act::None, "still no force before the delay");
+        CHECK(g.tick(13.0) && g.force_offered(), "force offered once the delay has passed");
+        CHECK(!g.tick(14.0), "the offer is reported exactly once");
+        CHECK(g.on_stop_click(14.0) == Act::ForceExit, "click on Force quit must end the process");
+        CHECK(g.on_run_done() == Act::None && !g.running() && !g.stopping(),
+              "done without a close request: nothing to do");
+    }
+    { // close while running: ask for the stop, keep the window, destroy it only when the worker is done
+        StopGate g(3.0);
+        g.on_run_start();
+        CHECK(g.on_close(5) == Act::RequestStop && g.closing() && g.stopping(),
+              "close during a run must request the stop, not close");
+        CHECK(g.on_close(6) == Act::None, "second close inside the delay is ignored");
+        CHECK(g.on_run_done() == Act::CloseNow, "window must close when the run has ended");
+    }
+    { // second close after the delay forces
+        StopGate g(3.0);
+        g.on_run_start();
+        CHECK(g.on_close(0) == Act::RequestStop, "first close");
+        CHECK(g.tick(3.5), "force offered");
+        CHECK(g.on_close(4) == Act::ForceExit, "second close after the delay must end the process");
+    }
+    { // Stop first, then close: the close joins the pending stop (no second request) and closes at the end
+        StopGate g(3.0);
+        g.on_run_start();
+        CHECK(g.on_stop_click(1) == Act::RequestStop, "stop");
+        CHECK(g.on_close(2) == Act::None && g.closing(), "close after Stop: no second request, remembered");
+        CHECK(g.on_run_done() == Act::CloseNow, "closes when done");
+    }
+    { // the run ends on its own (or stop-on-error) before any click: a later close is immediate; a new run starts clean
+        StopGate g(3.0);
+        g.on_run_start();
+        CHECK(g.on_run_done() == Act::None, "run ended by itself");
+        CHECK(g.on_close(0) == Act::CloseNow, "close after the run ended");
+        g.on_run_start();
+        CHECK(!g.stopping() && !g.closing() && !g.force_offered(), "a new run must start with a clean state");
+    }
+    { // the delay counts from the stop request, not from the start of the run
+        StopGate g(3.0);
+        g.on_run_start();
+        CHECK(!g.tick(1000), "no offer while not stopping, however long the run has been going");
+        CHECK(g.on_stop_click(1000) == Act::RequestStop, "stop late in the run");
+        CHECK(!g.tick(1001) && g.tick(1003), "offer comes 3 s after the stop request");
+    }
+}
+
+// plat::keep_awake (C1): POSIX has nothing to do; on Windows the request is really on the calling thread and clearing
+// removes it.
+static void test_keep_awake() {
+#ifdef _WIN32
+    CHECK(plat::keep_awake(true) == plat::KeepAwake::On, "keep_awake(true) must be accepted by the OS");
+    // SetThreadExecutionState returns the state that was in force before the call; the probe re-applies the same state
+    EXECUTION_STATE st = SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED);
+    CHECK((st & ES_SYSTEM_REQUIRED) != 0, "ES_SYSTEM_REQUIRED must be set after keep_awake(true) (state 0x%lx)",
+          (unsigned long)st);
+    plat::keep_awake(false);
+    st = SetThreadExecutionState(ES_CONTINUOUS); // probe: looks at the cleared state and leaves it cleared
+    CHECK((st & ES_SYSTEM_REQUIRED) == 0, "ES_SYSTEM_REQUIRED must be gone after keep_awake(false) (state 0x%lx)",
+          (unsigned long)st);
+#else
+    CHECK(plat::keep_awake(true) == plat::KeepAwake::NotSupported, "POSIX has nothing to keep awake");
+    plat::keep_awake(false);
+#endif
+}
+
 int main() {
     test_log.sink = [](const std::string& s) {
         printf("  (engine) %s", s.c_str());
@@ -626,6 +1399,18 @@ int main() {
     test_evolve();
     test_suite_parses();
     test_suite_keys();
+    test_cache_override();
+    test_flush_mode();
+    test_shared_key_sets();
+    test_values();
+    test_run_status();
+    test_exceptions();
+    test_sync_protocol();
+    test_lock_slices();
+    test_stop_gate();
+    test_keep_awake();
+    test_fpu_kernel();
+    test_report();
     test_fill_opts();
     test_march_opts();
     test_hammer_opts();

@@ -12,6 +12,23 @@ jobs:
           bash tools/format.sh --check
       - name: Engine self-test
         run: bash tools/selftest.sh
+  linux-asan-ubsan:
+    # The same self-test with everything built under -fsanitize=address,undefined: any report (or leak) fails the run.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Engine self-test under AddressSanitizer + UBSan
+        run: SAN=address,undefined bash tools/selftest.sh
+  linux-tsan:
+    # The same self-test under -fsanitize=thread (about 6 minutes). The read/write storm tests are left out inside tools/selftest.sh because
+    # they race by design (the writer rewrites identical data while its partner verifies it); nothing is suppressed.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Lower ASLR entropy (newer runner kernels break TSan's memory layout otherwise)
+        run: sudo sysctl vm.mmap_rnd_bits=28
+      - name: Engine self-test under ThreadSanitizer
+        run: SAN=thread bash tools/selftest.sh
   windows:
     runs-on: windows-latest
     steps:
@@ -20,9 +37,31 @@ jobs:
       - name: Build
         shell: cmd
         run: build.bat
-      - name: Smoke test (console build, quick suite, 64 MB)
+      - name: Build the test programs (unit tests, fault-injection console build)
+        # Same MSVC flags as the shipped build. build.bat configured build\cmake; all executables land in build\.
         shell: cmd
-        run: build\ddr5test_cli.exe -mb 64 -t 2 --quick --minutes 1 --no-large-pages
+        run: cmake --build build\cmake --config Release --target unit_tests ddr5test_cli_inject || exit /b 1
+      - name: Unit tests (MSVC build)
+        shell: cmd
+        run: ctest --test-dir build\cmake -C Release -R "^unit_tests$" --output-on-failure || exit /b 1
+      - name: Fault injection (MSVC build must report every planted fault)
+        # tools/inject_checks.sh is the same file tools/selftest.sh runs on Linux; Git Bash is on the runner. Red if any planted fault is missed.
+        shell: bash
+        run: bash tools/inject_checks.sh build/ddr5test_cli_inject.exe build/inject_checks
+      - name: Smoke test (console build, quick suite, 64 MB; the run must ask Windows to stay awake)
+        shell: cmd
+        run: |
+          build\ddr5test_cli.exe -mb 64 -t 2 --quick --minutes 1 --no-large-pages > smoke_quick.out 2>&1
+          set rc=%errorlevel%
+          type smoke_quick.out
+          if not "%rc%"=="0" exit /b 1
+          findstr /C:"keeping the system awake" smoke_quick.out || exit /b 1
+      - name: Smoke test (--list, and a given seed is echoed back)
+        shell: cmd
+        run: |
+          build\ddr5test_cli.exe --list || exit /b 1
+          build\ddr5test_cli.exe -mb 2 -t 1 --no-large-pages --test-seconds 2 -f "Bulk copy" --seed 777 > seed.out 2>&1 || exit /b 1
+          findstr /C:"run seed: 0x0000000000000309 (given)" seed.out || exit /b 1
       - uses: actions/upload-artifact@v4
         with:
           name: ddr5ramtest

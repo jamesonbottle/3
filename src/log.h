@@ -5,6 +5,12 @@
 
 namespace ddr5 {
 
+constexpr int kStatusWidth = 118; // columns of the live progress line (and of the blanking that erases it)
+
+// printf-style formatting appended to `s`. The text is never truncated and never overruns: the string grows to fit.
+// (A formatting error appends nothing.)
+void appendf(std::string& s, const char* fmt, ...);
+
 // Where text output goes. The front-end owns one Logger; it must outlive every Run and every parse call that uses it.
 struct Logger {
     std::function<void(const std::string&)> sink; // output sink: stdout in CLI mode (when empty), log pane in the GUI

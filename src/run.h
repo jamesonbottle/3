@@ -2,9 +2,11 @@
 // run.h - Chunk, View, Stats, Layout, Progress, ErrorSink, Run, walk().
 #include <algorithm>
 #include <atomic>
+#include <exception>
 #include <barrier>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <map>
 #include <mutex>
 #include <string>
@@ -15,11 +17,15 @@
 #include "order.h"
 #include "params.h"
 #include "platform.h"
+#include "seed.h"
 #include "types.h"
 
 namespace ddr5 {
 
 // ------------------------------------------------------------------ run context
+// Windows (window_mb) are rounded down to a multiple of this many LINES (256 KiB), with this as the minimum. Not a page
+// size.
+constexpr u64 kWindowGranuleLines = 4096;
 struct Chunk {
     u8* base;
     u64 lines;
@@ -30,8 +36,17 @@ struct View {
     u64 g;
     u64 n;
 };
+// A shared counter alone on its cache line: during an error storm the threads bump the lane/beat/address-bit counters
+// they hit, and counters that merely sit next to each other must not bounce a line between the cores.
+struct alignas(kLineBytes) Counter : std::atomic<u64> {
+    Counter() : std::atomic<u64>(0) {}
+    using std::atomic<u64>::operator=;
+};
+static_assert(sizeof(Counter) == kLineBytes, "one counter per cache line");
+
 struct Stats {
-    std::atomic<u64> lines{0}, bits{0}, lane[32], beat[16], blk[4], abit[48], trans{0}, stable{0}, unstable{0};
+    std::atomic<u64> lines{0}, bits{0}, blk[4], trans{0}, stable{0}, unstable{0};
+    Counter lane[32], beat[16], abit[48]; // the hot ones: every error bumps several of them
     Stats() { clear(); }
     void clear() {
         lines = 0;
@@ -52,13 +67,33 @@ struct Stats {
 inline thread_local u64 t_vcount =
     0; // lines this thread has verified since its last flush into Progress::vbytes / vtotal
 
+// Debug check of the barrier protocol (see "Barrier protocol" above struct Run). It is on in builds with asserts (no
+// NDEBUG) and wherever the build defines DDR5_CHECK_SYNC (tools/selftest.sh does, in every leg, through the CMake
+// option of the same name); a release build has none of it. The macro must be the same in every translation unit,
+// because Run::sync() and Run::parallel() are inline: set it only through the CMake option (ddr5_flags).
+#if !defined(DDR5_CHECK_SYNC) && !defined(NDEBUG)
+#define DDR5_CHECK_SYNC 1
+#endif
+#ifdef DDR5_CHECK_SYNC
+inline thread_local u64 t_syncs = 0; // sync() calls this worker thread has made in the parallel() in progress
+#endif
+
+// Index of the first worker whose sync() count differs from worker 0's, or -1 if all are equal (or there are none).
+// Always compiled so that the unit tests can call it in any build.
+inline int sync_count_mismatch(const std::vector<u64>& counts) {
+    for (size_t i = 1; i < counts.size(); i++)
+        if (counts[i] != counts[0])
+            return (int)i;
+    return -1;
+}
+
 // Where the tested memory is and how it is split between the worker threads. run_suite fills it in before the first
 // test starts; the algos only read it.
 struct Layout {
     u8* region = nullptr;
-    u64 regionBytes = 0;
-    int T = 1;                 // worker threads
-    std::vector<Chunk> chunks; // one per thread
+    std::atomic<u64> regionBytes{0}; // set once by run_suite (release); the GUI reads it through Run::status()
+    int T = 1;                       // worker threads
+    std::vector<Chunk> chunks;       // one per thread
 };
 
 // How far the run has got: the byte counters the workers bump, the clocks, and the user's stop criteria.
@@ -66,20 +101,27 @@ struct Progress {
     std::atomic<u64> done{0}; // bytes moved in the current test (drives the GB/s figure)
     // coverage (HCI/Karhu-style: how many times the tested region has been verified): this test / the whole run
     std::atomic<u64> vbytes{0}, vtotal{0};
-    double tStart = 0, tTestStart = 0; // plat::now() at the start of the run / of the current test
-    u64 stopCoverage = 0;              // stop once vtotal reaches this many percent of the region (0 = off)
-    double stopSeconds = 0;            // stop after this many seconds (0 = off)
+    std::atomic<double> tStart{0}; // plat::now() at the start of the run; set once by run_suite, read by Run::status()
+    double tTestStart = 0;         // plat::now() at the start of the current test
+    u64 stopCoverage = 0;          // stop once vtotal reaches this many percent of the region (0 = off)
+    double stopSeconds = 0;        // stop after this many seconds (0 = off)
     std::string stopReason;
 };
 
-// Error reporting: the log file, the "first error" times, the counters. `mu` serializes Run::report and also guards
-// Run::label (the status line reads it from the GUI thread).
+// Error reporting: the log file, the "first error" times, the counters. Only the text output needs `mu`: it serializes
+// the log lines Run::report writes (so they do not interleave) and also guards Run::label (the status line reads it
+// from the GUI thread). The counters and the "first error" times are lock-free.
 struct ErrorSink {
     mutable std::mutex mu; // mutable: Run::status() is const but has to lock it
     FILE* logf = nullptr;
-    u64 logged = 0;
-    double firstErrRun = -1, firstErrTest = -1; // seconds into the run / the current test; -1 = no error yet
+    std::atomic<u64> logged{0}; // error blocks written so far; once it reaches Cfg::maxLog report() stops taking `mu`
+    // seconds into the run / the current test; -1 = no error yet. Set once, by whichever thread gets there first
+    // (compare-exchange); run_suite resets firstErrTest between tests, when no worker is running.
+    std::atomic<double> firstErrRun{-1}, firstErrTest{-1};
     std::atomic<u64> errTotal{0};
+    // set (once, with a console warning) when a write to errors.logf failed (disk full, device gone): the details of
+    // some errors are then missing from the log file, but they are still counted and shown on the console
+    std::atomic<bool> logFailed{false};
 };
 
 struct Run;
@@ -90,20 +132,42 @@ int run_suite(const Settings& s, Run& R); // suite.h: the one function besides R
 //  - the algo-facing part (public, first): what algo_*.cpp may use. The data members are read-only for the algos
 //    (run_suite sets them before the tests start); they reach the shared counters only through the methods.
 //  - the front-end part (public, `Status` and below): what a GUI/CLI needs to follow a run from another thread.
-//  - everything else is private; run_suite is the only outside code that writes it (friend).
+//  - everything else is private; run_suite (through its SuiteDriver, a friend) is the only outside code that writes it.
 //
 // Ownership and threads. One Run serves exactly ONE run_suite call: the totals and error counters are never reset, so
 // a front-end makes a fresh Run per Start (the GUI) or has a single one (the CLI).
 //  - The front-end owns the Run and the Logger it refers to, and keeps both alive until run_suite returns. The GUI
 //    runs run_suite on a worker thread and follows it from the UI thread through status() / error_count().
-//  - run_suite owns the setup: it fills in cfg, rng, salt, testName, layout and progress, clears `stop` before the
-//    first test, and opens and closes errors.logf (CLI only; the GUI's Logger sink writes the log itself).
-//  - `stop` may be set by anyone: a front-end (Stop button, Ctrl-C), report() on the first error in stop-on-error
-//    mode, parallel() when a stop criterion (coverage or time) is reached. Only run_suite clears it, once, at the
-//    start.
+//  - run_suite owns the setup: it fills in cfg, rng, salt, testName, layout and progress, and opens and closes
+//    errors.logf (CLI only; the GUI's Logger sink writes the log itself). The fields status() reads from another
+//    thread (layout.regionBytes, progress.tStart) are atomics that run_suite stores with release order.
+//  - `stop` may be set by anyone, at any time, even before run_suite starts (a Stop that arrives early must not be
+//    lost): a front-end (Stop button, Ctrl-C), report() on the first error in stop-on-error mode, parallel() when a
+//    stop criterion (coverage or time) is reached. Nobody clears it: a Run serves exactly one run_suite call.
 //  - report() is called by the worker threads; under errors.mu it updates the error counters, the "first error" times
 //    and errors.logf. parallel() sets `bar` for its duration and joins every worker before it returns.
 //  - A Run is neither copyable nor movable: the workers, the barrier and the front-end all hold its address.
+//
+// Barrier protocol. sync() waits on one std::barrier that parallel() creates for its T workers; the barrier has no
+// notion of WHICH sync() a worker is at, it only counts arrivals. That is why the following rules matter:
+//  1. Same sequence. While `stop` is false, every worker makes exactly the same sequence of sync() calls for a job. How
+//     many calls there are may depend on the job (its phases, its dwell time), never on the thread id or on anything
+//     one worker decides alone. A decision that all workers must share is made by ONE worker, published, and read after
+//     a sync() (coherency: tid 0 sets `fin`, the others read it after the next barrier).
+//  2. Leaving. A worker leaves only by returning from its fn(t); parallel() then calls arrive_and_drop(), which counts
+//  as
+//     its arrival for the phase the others are waiting in and takes it out of every later phase, so nobody waits for a
+//     worker that has gone (an exception, a failed thread start and a Stop all end this way). Once `stop` is set the
+//     workers may therefore leave at different points (the check at the top of a job is read by each worker alone) and
+//     make different numbers of sync() calls: that is allowed, and stop is never cleared, so it stays true.
+//  3. No false errors after stop. A walk() that stop cuts short leaves data half written. Every worker must re-read
+//     `stop` AFTER the barrier that follows such a walk and before it verifies that data (evolve: `if (R.stop) break;`
+//     after the sync). Stop is monotonic, so if any worker saw it while writing, every worker sees it after the barrier
+//     and skips the verify; skipping a check can miss a fault but never invents one.
+//  4. Polling. walk() looks at `stop` every 65,536 lines; the other long loops poll at their own interval, so a Stop
+//     takes effect within about a window of work, not at the end of the job.
+// Debug check (DDR5_CHECK_SYNC): each worker counts its sync() calls; when parallel() ends and stop was never set, the
+// counts must be equal, otherwise it prints which worker differed and aborts (rule 1; selftest: DDR5TEST_EXTRA_SYNC).
 struct Run {
     // ---- algo-facing: data (read-only for the algos)
     const Logger& log; // where output goes; owned by the front-end, must outlive the Run
@@ -112,7 +176,7 @@ struct Run {
     Run& operator=(const Run&) = delete;
     u64 salt = 0; // from the run seed and the loop number (run_suite sets it per loop): every random choice is a
                   // function of it
-    int rng = 0;  // hash mixer chosen in Settings (0 splitmix64, 1 murmur3 fmix64, 2 xorshift64*); see mix64()
+    Rng rng = Rng::Default; // hash mixer chosen in Settings; see mix64()
     Layout layout;
     std::string testName;              // the running test; also the key into winctr
     std::map<std::string, u64> winctr; // per test name: how many windows earlier loops have used (rotates the windows)
@@ -122,15 +186,20 @@ struct Run {
     // call once per verified 64B line; flushes to the shared counters every 64K lines per thread, and once more when
     // the thread ends (parallel() calls vflush), so the lines counted since the last 64K boundary are not lost
     void vtick() {
-        if (++t_vcount >= 0x10000)
+        if (++t_vcount >= kTickLines)
             vflush();
     }
-    void sync() { bar->arrive_and_wait(); }
+    void sync() {
+#ifdef DDR5_CHECK_SYNC
+        t_syncs++;
+#endif
+        bar->arrive_and_wait();
+    }
     void set_label(const std::string& s) {
         std::lock_guard<std::mutex> l(errors.mu);
         label = s;
     }
-    void tick() { progress.done.fetch_add(0x10000ull * 64, std::memory_order_relaxed); }
+    void tick() { progress.done.fetch_add(kTickLines * kLineBytes, std::memory_order_relaxed); }
     void add_done(u64 bytes) { progress.done.fetch_add(bytes, std::memory_order_relaxed); } // bytes moved, for GB/s
     // Window `ctr` of the thread's chunk. ceil(lines / wl) windows rotate; the last one is shifted back so it ends
     // exactly at the chunk end (it overlaps the previous window instead of leaving a never-tested tail).
@@ -141,25 +210,25 @@ struct Run {
         u64 nw = (c.lines + wl - 1) / wl, s = (ctr % nw) * wl;
         if (s + wl > c.lines)
             s = c.lines - wl;
-        return {c.base + s * 64, c.g + s, wl};
+        return {c.base + s * kLineBytes, c.g + s, wl};
     }
     // A window of the same size that never overlaps view(tid, wl, ctr): where the disturb traffic goes. Needs >= 2
     // whole windows per chunk.
     View dview(int tid, u64 wl, u64 ctr) const {
         const Chunk& c = layout.chunks[tid];
         View v = view(tid, wl, ctr);
-        u64 sv = (u64)(v.base - c.base) / 64, sd = sv + wl;
+        u64 sv = (u64)(v.base - c.base) / kLineBytes, sd = sv + wl;
         if (sd + wl > c.lines)
             sd = sv >= wl ? sv - wl : sv + wl;
-        return {c.base + sd * 64, c.g + sd, wl};
+        return {c.base + sd * kLineBytes, c.g + sd, wl};
     }
     u64 window_lines(const Params& P) const {
         u64 mb = P.num("window_mb", 0);
         if (!mb)
             return 0;
-        u64 wl = (mb << 20) / 64 / layout.T;
-        wl = wl / 4096 * 4096;
-        return std::max<u64>(wl, 4096);
+        u64 wl = (mb << 20) / kLineBytes / layout.T;
+        wl = wl / kWindowGranuleLines * kWindowGranuleLines;
+        return std::max<u64>(wl, kWindowGranuleLines);
     }
     void sleep_ms(u64 ms) {
         double end = plat::now() + ms / 1000.0;
@@ -169,6 +238,9 @@ struct Run {
     template <class F>
     void parallel(F fn);
     void report(int tid, const u8* addr, const Line& e, const Line& a, const char* phase, bool reread = true);
+    // Appends to errors.logf (CLI; no-op without one) and flushes. A failed write sets errors.logFailed and prints ONE
+    // console warning; later failures stay quiet. Callers hold errors.mu, or run when no worker is active.
+    void write_error_log(const std::string& text);
 
     // ---- front-end: follow a run from another thread
     struct Status {
@@ -179,7 +251,11 @@ struct Run {
         std::string label; // the running test
     };
     Status status() const {
-        Status s{progress.tStart, layout.regionBytes, progress.vtotal.load(), errors.errTotal.load(), {}};
+        Status s{progress.tStart.load(std::memory_order_acquire),
+                 layout.regionBytes.load(std::memory_order_acquire),
+                 progress.vtotal.load(),
+                 errors.errTotal.load(),
+                 {}};
         std::lock_guard<std::mutex> l(errors.mu);
         s.label = label;
         return s;
@@ -187,22 +263,24 @@ struct Run {
     u64 error_count() const { return errors.errTotal.load(); }
 
   private:
-    friend int run_suite(const Settings& s, Run& R);
+    friend struct SuiteDriver; // suite.cpp: the implementation of run_suite
     void vflush() {
         u64 c = t_vcount;
         t_vcount = 0;
         if (c) {
-            progress.vbytes.fetch_add(c * 64, std::memory_order_relaxed);
-            progress.vtotal.fetch_add(c * 64, std::memory_order_relaxed);
+            progress.vbytes.fetch_add(c * kLineBytes, std::memory_order_relaxed);
+            progress.vtotal.fetch_add(c * kLineBytes, std::memory_order_relaxed);
         }
     }
 
     Cfg cfg;
     Progress progress;
     ErrorSink errors;
-    Stats st, total;               // this test's / the whole run's error statistics
-    std::barrier<>* bar = nullptr; // the barrier of the parallel() in progress (sync() waits on it)
-    std::string label;             // the running test's name for the status line; guarded by errors.mu
+    Stats st, total;                  // this test's / the whole run's error statistics
+    std::barrier<>* bar = nullptr;    // the barrier of the parallel() in progress (sync() waits on it)
+    std::atomic<bool> aborted{false}; // a worker threw: report() ignores what the other workers see from then on
+    bool pinWarned = false; // the "could not pin" warning is given once per run, by the thread that calls parallel()
+    std::string label;      // the running test's name for the status line; guarded by errors.mu
 };
 static_assert(!std::is_copy_constructible_v<Run> && !std::is_copy_assignable_v<Run> &&
                   !std::is_move_constructible_v<Run> && !std::is_move_assignable_v<Run>,
@@ -213,57 +291,131 @@ void Run::parallel(F fn) {
     std::barrier<> b(layout.T);
     bar = &b;
     std::atomic<int> running{layout.T};
+    std::atomic<int> unpinned{0}; // workers whose plat::pin() failed
+    // Nothing that goes wrong in here may reach std::terminate (a joinable std::thread that is destroyed, or an
+    // exception that leaves a thread function). An exception from a worker, from creating the workers or from the
+    // monitor loop below is kept (the first one), the run is stopped and marked aborted, every started worker still
+    // leaves the barrier (so nobody waits for it forever) and is joined, and the exception is rethrown on the calling
+    // thread once all workers are gone.
+    std::exception_ptr failure;
+    std::mutex failMu;
+    auto fail = [&] { // call only from a catch block
+        {
+            std::lock_guard<std::mutex> l(failMu);
+            if (!failure)
+                failure = std::current_exception();
+        }
+        aborted = true;
+        stop = true;
+    };
+#ifdef DDR5_CHECK_SYNC
+    std::vector<u64> syncs((size_t)layout.T, 0); // per worker: its sync() calls, stored when the worker ends
+#endif
     std::vector<std::thread> th;
-    for (int t = 0; t < layout.T; t++)
-        th.emplace_back([&, t] {
-            plat::pin(t);
-            fn(t);
-            vflush();
+    int started = 0;
+    try {
+        th.reserve((size_t)layout.T);
+        for (int t = 0; t < layout.T; t++) {
+            th.emplace_back([&, t] {
+#ifdef DDR5_CHECK_SYNC
+                t_syncs = 0;
+#endif
+                try {
+                    if (!plat::pin(t))
+                        unpinned++; // not fatal: the test is still valid, the thread just may migrate between cores
+                    fn(t);
+                } catch (...) {
+                    fail();
+                }
+#ifdef DDR5_CHECK_SYNC
+                syncs[(size_t)t] = t_syncs;
+#endif
+                vflush();
+                b.arrive_and_drop();
+                running--;
+            });
+            started++;
+        }
+    } catch (...) { // e.g. the OS thread limit: the workers that never started must not be waited for
+        fail();
+        for (int k = started; k < layout.T; k++) {
             b.arrive_and_drop();
             running--;
-        });
+        }
+    }
     double t0 = plat::now(), tl = t0, hb = t0;
     u64 dl = progress.done.load();
-    while (running.load() > 0) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(250));
-        double t = plat::now();
-        if (!stop.load() && layout.regionBytes) { // user-set stop criteria: coverage target or time limit
-            if (progress.stopCoverage && progress.vtotal.load() * 100 >= progress.stopCoverage * layout.regionBytes) {
-                progress.stopReason = "coverage target reached";
-                stop = true;
-            } else if (progress.stopSeconds > 0 && progress.tStart > 0 && t - progress.tStart >= progress.stopSeconds) {
-                progress.stopReason = "time limit reached";
-                stop = true;
+    try {
+        while (running.load() > 0) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(250));
+            double t = plat::now();
+            if (!stop.load() && layout.regionBytes) { // user-set stop criteria: coverage target or time limit
+                if (progress.stopCoverage &&
+                    progress.vtotal.load() * 100 >= progress.stopCoverage * layout.regionBytes) {
+                    progress.stopReason = "coverage target reached";
+                    stop = true;
+                } else if (progress.stopSeconds > 0 && progress.tStart > 0 &&
+                           t - progress.tStart >= progress.stopSeconds) {
+                    progress.stopReason = "time limit reached";
+                    stop = true;
+                }
+            }
+            if (t - tl >= 0.5) {
+                u64 d = progress.done.load();
+                double rate = (d - dl) / (t - tl) / 1e9;
+                tl = t;
+                dl = d;
+                std::string lab;
+                {
+                    std::lock_guard<std::mutex> l(errors.mu);
+                    lab = label;
+                }
+                char buf[220];
+                snprintf(buf, sizeof buf, "  [%5.0fs] %-50.50s %5.1f GB/s  cov %4.0f%%  errors: %llu (this test %llu)",
+                         t - t0, lab.c_str(), rate,
+                         layout.regionBytes ? 100.0 * progress.vtotal.load() / layout.regionBytes : 0.0,
+                         (unsigned long long)errors.errTotal.load(), // run total: st is reset for every test
+                         (unsigned long long)st.lines.load());
+                if (log.console && log.tty) {
+                    printf("\r%-*.*s", kStatusWidth, kStatusWidth, buf);
+                    fflush(stdout);
+                } else if (log.console && t - hb >= 30.0) {
+                    hb = t;
+                    printf("%s\n", buf);
+                    fflush(stdout);
+                }
             }
         }
-        if (t - tl >= 0.5) {
-            u64 d = progress.done.load();
-            double rate = (d - dl) / (t - tl) / 1e9;
-            tl = t;
-            dl = d;
-            std::string lab;
-            {
-                std::lock_guard<std::mutex> l(errors.mu);
-                lab = label;
-            }
-            char buf[220];
-            snprintf(buf, sizeof buf, "  [%5.0fs] %-50.50s %5.1f GB/s  cov %4.0f%%  errors: %llu", t - t0, lab.c_str(),
-                     rate, layout.regionBytes ? 100.0 * progress.vtotal.load() / layout.regionBytes : 0.0,
-                     (unsigned long long)st.lines.load());
-            if (log.console && log.tty) {
-                printf("\r%-118.118s", buf);
-                fflush(stdout);
-            } else if (log.console && t - hb >= 30.0) {
-                hb = t;
-                printf("%s\n", buf);
-                fflush(stdout);
-            }
-        }
+    } catch (...) {
+        fail();
     }
     for (auto& x : th)
         x.join();
     bar = nullptr;
+#ifdef DDR5_CHECK_SYNC
+    // Rule 1 of the barrier protocol. Skipped once stop is set (workers may then leave at different points, rule 2) or
+    // a worker failed; stop is never cleared, so "stop is false here" means it was false during the whole call.
+    if (!failure && !stop.load()) {
+        int bad = sync_count_mismatch(syncs);
+        if (bad >= 0) {
+            fprintf(stderr,
+                    "internal error: barrier protocol violated in '%s': worker %d made %llu sync() calls, worker 0 "
+                    "made %llu\n",
+                    testName.c_str(), bad, (unsigned long long)syncs[(size_t)bad], (unsigned long long)syncs[0]);
+            fflush(stderr);
+            std::abort();
+        }
+    }
+#endif
     log.print_clear();
+    if (unpinned.load() > 0 && !pinWarned) { // all workers are joined here, so logging needs no lock
+        pinWarned = true;
+        log.emitf("warning: %d of %d threads could not be pinned to a CPU, so the OS may move them between cores "
+                  "(the results are still valid)\n",
+                  unpinned.load(), layout.T);
+    }
+    if (failure)
+        std::rethrow_exception(failure);
 }
 
 // walk q = 0..n-1 through an order; f(lineIndex)

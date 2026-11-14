@@ -1,5 +1,7 @@
 // algo.cpp - shared algo helpers and the algo registry (algos()).
 #include "algo.h"
+#include <atomic>
+#include "gen.h"
 #include "lineio.h"
 
 namespace ddr5 {
@@ -7,7 +9,7 @@ namespace ddr5 {
 OrderSpec ospec(const Params& P, const char* key, const char* def, const Logger& log) {
     OrderSpec s;
     if (!Order::parse(P.str(key, def), s.k, s.rev)) {
-        log.emitf("bad %s\n", key);
+        log.emitf("%skey '%s': unknown address order '%s'\n", P.where().c_str(), key, P.str(key, def).c_str());
     }
     return s;
 }
@@ -18,7 +20,7 @@ std::vector<u64> stride_list(const Params& P, bool needed) {
         return o;
     }
     for (u64 b : P.nums("stride", "4K")) {
-        o.push_back(std::max<u64>(1, b / 64));
+        o.push_back(std::max<u64>(1, b / kLineBytes));
     }
     return o;
 }
@@ -28,18 +30,22 @@ std::vector<u64> stride_list(const Params& P, bool needed) {
 // window sits written. Row activations, refresh collisions and bus noise happen around data that was just stored; the
 // victim is verified afterwards. mode 0 = reads, 1 = writes (scribble), 2 = read+write. Needs window_mb with at least
 // two windows per chunk.
-static volatile u64 g_sink = 0;
+// Keeps the reads of disturb traffic from being optimised away. Each call folds what it read into a LOCAL accumulator
+// (a register) and publishes it once at the end with a relaxed atomic xor: one shared write per call instead of one per
+// line, so the threads do not bounce the cache line of this variable between cores while they generate the traffic.
+static std::atomic<u64> g_sink{0};
 void disturb_traffic(Run& R, const View& d, int mode, u64 passes, u64 seed) {
     Order o;
     o.init(Order::RANDOM, d.n, 1, seed, R.salt);
+    u64 acc = 0;
     for (u64 p = 0; p < passes && !R.stop; p++)
         walk(R, o, false, [&](u64 i) {
-            u8* a = d.base + i * 64;
+            u8* a = d.base + i * kLineBytes;
             if (mode != 1) {
                 Line t;
                 IO<32, 0, 0>::load(a, t);
-                _mm_clflush(a);
-                g_sink = g_sink ^ t.w[0];
+                flush_line(a);
+                acc ^= t.w[0];
             }
             if (mode >= 1) {
                 Line l;
@@ -48,6 +54,7 @@ void disturb_traffic(Run& R, const View& d, int mode, u64 passes, u64 seed) {
                 IO<32, 0, 1>::store(a, l);
             }
         });
+    g_sink.fetch_xor(acc, std::memory_order_relaxed);
 }
 int parse_dmode(const std::string& s) {
     return s == "r" || s == "read" ? 0 : s == "w" || s == "write" ? 1 : s == "rw" ? 2 : -1;
@@ -102,11 +109,11 @@ const Keys& algo_keys(const std::string& algo) {
     return i == table.end() ? none : i->second;
 }
 
-// A key the test block set itself must be one its algo understands. A key inherited from [default] (width, flush)
-// reaches every test, so it only has to be understood by some algo.
+// A key the test set itself must be one its algo understands. A key inherited from kDefaults in suite_data.cpp
+// (width, flush) reaches every test, so it only has to be understood by some algo.
 std::vector<std::string> unknown_keys(const TestDef& t) {
     std::vector<std::string> bad;
-    std::string algo = lower(t.p.str("algo", "fill"));
+    const std::string algo = t.algo();
     if (!algos().count(algo))
         return bad; // run_suite skips a test with an unknown algo; the unit tests check the algo names of the built-in
                     // suite
@@ -124,6 +131,54 @@ std::vector<std::string> unknown_keys(const TestDef& t) {
             bad.push_back(k);
     }
     return bad;
+}
+
+// ------------------------------------------------------------------ bad values
+// Runs the option parsing of the test's algo (and the shared helpers it uses) once, on a copy, with every message
+// captured, and returns what it complained about: values that are not numbers / flags, unknown orders, march elements
+// that do not parse, unknown styles. Empty = every value of the test is usable. It reads the same keys the algo will
+// read (it calls the algo's own XOpts::from), so there is no second list of which key holds a number to keep in step.
+std::vector<std::string> bad_values(const TestDef& t) {
+    std::vector<std::string> out;
+    const std::string algo = t.algo();
+    if (!algos().count(algo))
+        return out;
+    Params P = t.p;
+    P.test = t.name;
+    P.bad.clear();
+    Logger cap;
+    cap.sink = [&](const std::string& s) {
+        out.push_back(trim(s));
+    };
+    if (algo == "fill")
+        FillOpts::from(P, cap);
+    else if (algo == "march")
+        MarchOpts::from(P, cap);
+    else if (algo == "evolve")
+        EvolveOpts::from(P, cap);
+    else if (algo == "rwstorm")
+        RwstormOpts::from(P, cap);
+    else if (algo == "hammer")
+        HammerOpts::from(P);
+    else if (algo == "copy")
+        CopyOpts::from(P);
+    else if (algo == "chase")
+        ChaseOpts::from(P);
+    else if (algo == "probe")
+        ProbeOpts::from(P);
+    else if (algo == "pagemix")
+        PagemixOpts::from(P);
+    else if (algo == "coherency")
+        CoherencyOpts::from(P);
+    const Keys& mine = algo_keys(algo);
+    if (mine.count("data"))
+        build_vars(P, 0, Rng::Default, cap);
+    if (mine.count("stride"))
+        stride_list(P, true); // from() reads it only when an order needs it; a bad value is wrong either way
+    if (mine.count("window_mb"))
+        P.num("window_mb", 0);
+    out.insert(out.end(), P.bad.begin(), P.bad.end());
+    return out;
 }
 
 } // namespace ddr5

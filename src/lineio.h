@@ -2,13 +2,15 @@
 // lineio.h - 64-byte line store/load/verify at selectable width and cache behaviour. Header-only (templates + inline
 // hot path).
 #include <type_traits>
+#include "flush.h"
 #include "types.h"
 
 namespace ddr5 {
 
 // ------------------------------------------------------------------ line I/O at selectable width / cache behaviour
-// W = access width in bytes (8 scalar, 16 SSE2, 32 AVX2); NT = non-temporal stores; FL = clflush after each access
-// so verification really comes from DRAM instead of the cache hierarchy.
+// W = access width in bytes (8 scalar, 16 SSE2, 32 AVX2); NT = non-temporal stores; FL = flush after each access
+// so verification really comes from DRAM instead of the cache hierarchy (flush_line: CLFLUSHOPT when the CPU has it,
+// see flush.h).
 template <int W, int NT, int FL>
 struct IO {
     static inline void store(void* d, const Line& s) {
@@ -39,7 +41,7 @@ struct IO {
             }
         }
         if constexpr (FL && !NT)
-            _mm_clflush(d);
+            flush_line(d);
         CBAR();
     }
     static inline void load(const void* a, Line& t) {
@@ -64,13 +66,21 @@ struct IO {
         if (acc)
             act = t;
         if constexpr (FL)
-            _mm_clflush(a);
+            flush_line(a);
         CBAR();
         return acc == 0;
     }
 };
 template <int V>
 using IC = std::integral_constant<int, V>;
+// Turns a run-time flag into a compile-time one: calls f(IC<1>{}) when `fl` is set, f(IC<0>{}) otherwise.
+template <class F>
+inline void with_flush(bool fl, F&& f) {
+    if (fl)
+        f(IC<1>{});
+    else
+        f(IC<0>{});
+}
 template <class F>
 inline void dispatch(int width, bool nt, bool fl, F&& f) {
     auto d3 = [&](auto w) {
