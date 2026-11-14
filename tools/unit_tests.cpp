@@ -20,6 +20,7 @@
 #include "params.h"
 #include "run.h"
 #include "seed.h"
+#include "stop_gate.h"
 #include "suite.h"
 #include "types.h"
 
@@ -1297,6 +1298,69 @@ static void test_report() {
     }
 }
 
+// StopGate (GUI Stop / close rules, B2): the UI never waits for the worker, a second click only forces after the delay,
+// close waits for the run's done message.
+static void test_stop_gate() {
+    using Act = StopGate::Act;
+    { // idle: close goes straight through, Stop does nothing (the GUI starts a run instead)
+        StopGate g(3.0);
+        CHECK(g.on_close(0) == Act::CloseNow, "close with no run must destroy the window");
+        CHECK(g.on_stop_click(0) == Act::None, "Stop with no run must do nothing");
+        CHECK(!g.tick(100), "no force offer without a run");
+    }
+    { // Stop: the first click asks, the second one within the delay is ignored, after the delay it forces
+        StopGate g(3.0);
+        g.on_run_start();
+        CHECK(g.running() && !g.stopping(), "state after start");
+        CHECK(g.on_stop_click(10) == Act::RequestStop && g.stopping(), "first Stop click must request the stop");
+        CHECK(g.on_stop_click(10.5) == Act::None, "second click inside the delay must be ignored (double click)");
+        CHECK(!g.tick(12.9) && !g.force_offered(), "no force offer before the delay");
+        CHECK(g.on_stop_click(12.9) == Act::None, "still no force before the delay");
+        CHECK(g.tick(13.0) && g.force_offered(), "force offered once the delay has passed");
+        CHECK(!g.tick(14.0), "the offer is reported exactly once");
+        CHECK(g.on_stop_click(14.0) == Act::ForceExit, "click on Force quit must end the process");
+        CHECK(g.on_run_done() == Act::None && !g.running() && !g.stopping(),
+              "done without a close request: nothing to do");
+    }
+    { // close while running: ask for the stop, keep the window, destroy it only when the worker is done
+        StopGate g(3.0);
+        g.on_run_start();
+        CHECK(g.on_close(5) == Act::RequestStop && g.closing() && g.stopping(),
+              "close during a run must request the stop, not close");
+        CHECK(g.on_close(6) == Act::None, "second close inside the delay is ignored");
+        CHECK(g.on_run_done() == Act::CloseNow, "window must close when the run has ended");
+    }
+    { // second close after the delay forces
+        StopGate g(3.0);
+        g.on_run_start();
+        CHECK(g.on_close(0) == Act::RequestStop, "first close");
+        CHECK(g.tick(3.5), "force offered");
+        CHECK(g.on_close(4) == Act::ForceExit, "second close after the delay must end the process");
+    }
+    { // Stop first, then close: the close joins the pending stop (no second request) and closes at the end
+        StopGate g(3.0);
+        g.on_run_start();
+        CHECK(g.on_stop_click(1) == Act::RequestStop, "stop");
+        CHECK(g.on_close(2) == Act::None && g.closing(), "close after Stop: no second request, remembered");
+        CHECK(g.on_run_done() == Act::CloseNow, "closes when done");
+    }
+    { // the run ends on its own (or stop-on-error) before any click: a later close is immediate; a new run starts clean
+        StopGate g(3.0);
+        g.on_run_start();
+        CHECK(g.on_run_done() == Act::None, "run ended by itself");
+        CHECK(g.on_close(0) == Act::CloseNow, "close after the run ended");
+        g.on_run_start();
+        CHECK(!g.stopping() && !g.closing() && !g.force_offered(), "a new run must start with a clean state");
+    }
+    { // the delay counts from the stop request, not from the start of the run
+        StopGate g(3.0);
+        g.on_run_start();
+        CHECK(!g.tick(1000), "no offer while not stopping, however long the run has been going");
+        CHECK(g.on_stop_click(1000) == Act::RequestStop, "stop late in the run");
+        CHECK(!g.tick(1001) && g.tick(1003), "offer comes 3 s after the stop request");
+    }
+}
+
 int main() {
     test_log.sink = [](const std::string& s) {
         printf("  (engine) %s", s.c_str());
@@ -1317,6 +1381,7 @@ int main() {
     test_exceptions();
     test_sync_protocol();
     test_lock_slices();
+    test_stop_gate();
     test_fpu_kernel();
     test_report();
     test_fill_opts();
