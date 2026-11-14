@@ -77,23 +77,30 @@ void algo_chase(Run& R, const Params& P) {
                     pos[k] = k * steps;
                     p[k] = o.at(pos[k]);
                 }
+                // What the K loads of one step returned. A step is done in three parts: ALL K loads first (the K chains
+                // are independent, so their cache misses overlap: that is the memory-level parallelism this test is
+                // named for), then the K flushes, then the K checks. The old loop did load, flush and check for one
+                // chain before it touched the next, which kept the loads of different chains from overlapping.
+                std::vector<Line> act(K);
                 for (u64 st = 0; st < steps && !R.stop; st++) {
+                    CBAR();
+                    for (u64 k = 0; k < K; k++)
+                        IO<32, 0, 0>::load(w.base + p[k] * kLineBytes, act[k]);
+                    for (u64 k = 0; k < K; k++)
+                        flush_line(w.base + p[k] * kLineBytes);
+                    CBAR();
                     for (u64 k = 0; k < K; k++) {
                         const u8* a = w.base + p[k] * kLineBytes;
-                        Line act, e;
-                        CBAR();
-                        IO<32, 0, 0>::load(a, act);
-                        flush_line(a);
-                        CBAR();
-                        make(p[k], act.w[0], e);
+                        Line e;
+                        make(p[k], act[k].w[0], e);
                         R.vtick();
-                        if (memcmp(&act, &e, kLineBytes) != 0 || act.w[0] >= w.n) {
-                            R.report(tid, a, e, act, "chase");
+                        if (memcmp(&act[k], &e, kLineBytes) != 0 || act[k].w[0] >= w.n) {
+                            R.report(tid, a, e, act[k], "chase");
                             // The stored pointer cannot be trusted. Carry on from the order's own next line, so the
                             // rest of the chain is still checked and every bad line is counted.
                             p[k] = o.at(pos[k] + 1 == w.n ? 0 : pos[k] + 1);
                         } else
-                            p[k] = act.w[0]; // the next address comes from the data just loaded: a dependent load
+                            p[k] = act[k].w[0]; // the next address comes from the data just loaded: a dependent load
                         pos[k]++;
                     }
                     if (((st + 1) & 0xFFFF) == 0) {
