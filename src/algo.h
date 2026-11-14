@@ -79,14 +79,62 @@ std::vector<MVar> parse_march_variants(const std::string& str, const Logger& log
 //   - a line that was NOT rewritten but changed = a stray write, disturb or leak from the traffic around it
 // Memory therefore holds a mix of generations at all times, and old data must survive while its neighbours are being
 // rewritten.
-inline u64 evo_period(u64 g, u64 seed, u64 maxp) {
-    return 1 + splitmix(g ^ seed) % maxp;
+// High 64 bits of a * b: maps a 64-bit hash onto 0..b-1 without the 64-bit division a runtime `%` costs.
+inline u64 mulhi64(u64 a, u64 b) {
+#if defined(_MSC_VER)
+    return __umulh(a, b);
+#else
+    return (u64)(((unsigned __int128)a * b) >> 64);
+#endif
 }
-inline void evo_make(u64 g, u64 gen, u64 seed, Rng rng, Line& o) { // rng: Run::rng
-    u64 k = splitmix(seed ^ (gen * 0xD6E8FEB86659FD93ull));
+// The period of a line, uniform in 1..maxp. Multiply-high instead of `% maxp` (AUDIT_PLAN D3): the data it picks
+// differs from older versions for the same seed, which does not matter because nothing is stored between runs.
+inline u64 evo_period(u64 g, u64 seed, u64 maxp) {
+    return 1 + mulhi64(splitmix(g ^ seed), maxp);
+}
+// The part of a line's data that depends only on its generation; evo_make_k adds the line.
+inline u64 evo_key(u64 seed, u64 gen) {
+    return splitmix(seed ^ (gen * 0xD6E8FEB86659FD93ull));
+}
+inline void evo_make_k(u64 g, u64 k, Rng rng, Line& o) { // rng: Run::rng
     for (int j = 0; j < 8; j++)
         o.w[j] = mix64(k + (g << 3) + j, rng); // follows the selected RNG (Advanced > RNG / --rng)
 }
+inline void evo_make(u64 g, u64 gen, u64 seed, Rng rng, Line& o) {
+    evo_make_k(g, evo_key(seed, gen), rng, o);
+}
+// What a pass needs per line, as a table indexed by the line's period. Pass p rewrites a line of period `per` when
+// p % per == 0, and the line then holds generation p / per, i.e. key evo_key(seed, p / per). Both depend only on (p,
+// per), and per takes at most maxp values, so they are computed once per pass instead of dividing for every line twice
+// (write walk and verify walk). Periods above kMax fall back to the direct arithmetic (a table that large would cost
+// more than it saves on a small window).
+struct EvoPass {
+    static constexpr u64 kMax = 1024;
+    u64 seed = 0, maxp = 1, p = 0;
+    std::vector<u64> k;  // k[per] = evo_key(seed, p / per)
+    std::vector<u8> due; // due[per] = (p % per == 0)
+    bool tab = false;
+    void init(u64 seed_, u64 maxp_) {
+        seed = seed_;
+        maxp = maxp_;
+        tab = maxp <= kMax;
+        if (tab) {
+            k.assign(maxp + 1, 0);
+            due.assign(maxp + 1, 0);
+        }
+    }
+    void set(u64 pass) {
+        p = pass;
+        if (!tab)
+            return;
+        for (u64 per = 1; per <= maxp; per++) {
+            k[per] = evo_key(seed, p / per);
+            due[per] = p % per == 0;
+        }
+    }
+    bool is_due(u64 per) const { return tab ? due[per] != 0 : p % per == 0; }
+    u64 key(u64 per) const { return tab ? k[per] : evo_key(seed, p / per); }
+};
 
 // ------------------------------------------------------------------ typed test options
 // One struct per algo, parsed ONCE before R.parallel: the algo body reads fields, never Params. from() is the only

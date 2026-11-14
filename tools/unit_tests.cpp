@@ -244,6 +244,32 @@ static void test_evolve() {
         CHECK(hist[per] > lines / maxp * 3 / 4 && hist[per] < lines / maxp * 5 / 4,
               "period %llu chosen by %llu of %llu lines (expected ~%llu)", (unsigned long long)per,
               (unsigned long long)hist[per], (unsigned long long)lines, (unsigned long long)(lines / maxp));
+    // The per-pass table (EvoPass) must give exactly the direct arithmetic, with the table (maxp <= kMax) and without
+    // it (the fallback above kMax), and every period must stay inside 1..maxp for any maxp, including 1.
+    for (u64 mp : {(u64)1, (u64)2, (u64)8, EvoPass::kMax, EvoPass::kMax + 1, (u64)5000}) {
+        EvoPass ep;
+        ep.init(seed, mp);
+        CHECK(ep.tab == (mp <= EvoPass::kMax), "maxp %llu: table mode is wrong", (unsigned long long)mp);
+        u64 bad = 0, outside = 0;
+        for (u64 pass = 0; pass <= 40; pass++) {
+            ep.set(pass);
+            for (u64 per = 1; per <= mp; per += (mp > 64 ? 37 : 1)) {
+                Line a{}, b{};
+                bad += ep.is_due(per) != (pass % per == 0);
+                bad += ep.key(per) != evo_key(seed, pass / per);
+                evo_make_k(11, ep.key(per), Rng::SplitMix, a);
+                evo_make(11, pass / per, seed, Rng::SplitMix, b);
+                bad += memcmp(&a, &b, kLineBytes) != 0;
+            }
+        }
+        for (u64 g = 0; g < 5000; g++) {
+            u64 per = evo_period(g, seed, mp);
+            outside += per < 1 || per > mp;
+        }
+        CHECK(!bad, "maxp %llu: EvoPass differs from the direct arithmetic in %llu cases", (unsigned long long)mp,
+              (unsigned long long)bad);
+        CHECK(!outside, "maxp %llu: %llu periods outside 1..maxp", (unsigned long long)mp, (unsigned long long)outside);
+    }
     const Rng rngs[] = {Rng::SplitMix, Rng::Murmur, Rng::XorShift};
     for (int mode = 0; mode < 3;
          mode++) { // the data follows the selected RNG, so every mixer must keep (line, generation) pairs apart

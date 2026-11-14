@@ -73,23 +73,27 @@ void algo_evolve(Run& R, const Params& P) {
             Order ow, ov; // ow / ov: the write and the verify walk over this job's windows
             ow.init(wo.k, w.n, j.stride, 21 + ji, R.salt);
             ov.init(vo.k, vw.n, j.stride, 55 + ji, R.salt);
+            const u64 k0 = evo_key(j.seed, 0);
+            EvoPass ep; // per thread: the table is rebuilt at the start of every pass
+            ep.init(j.seed, opt.period);
             dispatch(opt.width, opt.nt, opt.flush, [&](auto Wc, auto NTc, auto FLc) {
                 using io = IO<decltype(Wc)::value, decltype(NTc)::value, decltype(FLc)::value>;
                 walk(R, ow, wo.rev, [&](u64 i) {
                     Line l;
-                    evo_make(w.g + i, 0, j.seed, R.rng, l);
+                    evo_make_k(w.g + i, k0, R.rng, l);
                     io::store(w.base + i * kLineBytes, l);
                 }); // generation 0 everywhere
                 _mm_sfence();
                 R.sync();
                 for (u64 p = 1; p <= opt.passes && !R.stop; p++) {
                     DDR5_INJECT(evolve_stop_in_write, R, tid, p);
+                    ep.set(p);
                     walk(R, ow, wo.rev, [&](u64 i) {
                         u64 g = w.g + i, per = evo_period(g, j.seed, opt.period);
-                        if (p % per)
+                        if (!ep.is_due(per))
                             return; // not this line's turn: it must keep its old data
                         Line l;
-                        evo_make(g, p / per, j.seed, R.rng, l);
+                        evo_make_k(g, ep.key(per), R.rng, l);
                         io::store(w.base + i * kLineBytes, l);
                     });
                     _mm_sfence();
@@ -102,7 +106,7 @@ void algo_evolve(Run& R, const Params& P) {
                         const u8* a = vw.base + i * kLineBytes;
                         u64 g = vw.g + i;
                         Line e, act;
-                        evo_make(g, p / evo_period(g, j.seed, opt.period), j.seed, R.rng, e);
+                        evo_make_k(g, ep.key(evo_period(g, j.seed, opt.period)), R.rng, e);
                         R.vtick();
                         if (!io::verify(a, e, act))
                             R.report(tid, a, e, act, "evolve-verify");
