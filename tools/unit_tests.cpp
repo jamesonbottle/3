@@ -1018,6 +1018,103 @@ static void test_sync_protocol() {
     }
 }
 
+// Locking the region in slices (B1, platform.h). First the slicing logic with a fake lock function: the slices must
+// tile [0, bytes) exactly, Stop must end it before the next slice, and a failure must end it too. Then plat::alloc
+// itself with Stop already raised (the real mlock / VirtualLock path): it must return usable memory, not locked, saying
+// why. A lock of many GB that is cut short in the middle cannot be run here, so the fake lock function stands in for
+// it.
+static void test_lock_slices() {
+    using plat::lock_in_slices;
+    using plat::LockProgress;
+    struct Call {
+        u64 off, n;
+    };
+    // (bytes, slice): exact multiple, short last slice, smaller than one slice, one byte, slice 0 = one slice, nothing
+    const u64 cases[][2] = {{1200, 300}, {1000, 300}, {100, 300}, {1, 1}, {1000, 0}, {0, 300}};
+    for (const auto& c : cases) {
+        const u64 bytes = c[0], slice = c[1] ? c[1] : c[0];
+        std::vector<u8> mem(bytes + 1);
+        std::vector<Call> calls;
+        const LockProgress r = lock_in_slices(mem.data(), bytes, nullptr, c[1], [&](u8* p, u64 n) {
+            calls.push_back({(u64)(p - mem.data()), n});
+            return true;
+        });
+        u64 next = 0;
+        bool tiled = true;
+        for (const Call& k : calls) {
+            tiled = tiled && k.off == next && k.n >= 1 && k.n <= slice;
+            next += k.n;
+        }
+        const u64 want = bytes ? (bytes + slice - 1) / slice : 0;
+        CHECK(tiled && next == bytes && calls.size() == want && r.done == bytes && !r.failed && !r.stopped,
+              "bytes=%llu slice=%llu: %zu calls (want %llu), covered %llu, done %llu, tiled=%d",
+              (unsigned long long)bytes, (unsigned long long)c[1], calls.size(), (unsigned long long)want,
+              (unsigned long long)next, (unsigned long long)r.done, (int)tiled);
+    }
+    std::vector<u8> mem(1000);
+    { // Stop raised during the 2nd slice: that slice is finished, the 3rd is never started
+        std::atomic<bool> stop{false};
+        int calls = 0;
+        const LockProgress r = lock_in_slices(mem.data(), 1000, &stop, 300, [&](u8*, u64) {
+            if (++calls == 2)
+                stop = true;
+            return true;
+        });
+        CHECK(calls == 2 && r.done == 600 && r.stopped && !r.failed, "stop in slice 2: %d calls, done %llu, stopped=%d",
+              calls, (unsigned long long)r.done, (int)r.stopped);
+    }
+    { // Stop already raised: nothing is locked
+        std::atomic<bool> stop{true};
+        int calls = 0;
+        const LockProgress r = lock_in_slices(mem.data(), 1000, &stop, 300, [&](u8*, u64) {
+            calls++;
+            return true;
+        });
+        CHECK(calls == 0 && r.done == 0 && r.stopped && !r.failed, "stop before the first slice: %d calls", calls);
+    }
+    { // Stop raised by the LAST slice: everything is locked, so the run was not cut short
+        std::atomic<bool> stop{false};
+        const LockProgress r = lock_in_slices(mem.data(), 1000, &stop, 250, [&](u8* p, u64) {
+            if (p == mem.data() + 750)
+                stop = true;
+            return true;
+        });
+        CHECK(r.done == 1000 && !r.stopped && !r.failed, "stop in the last slice: done %llu, stopped=%d",
+              (unsigned long long)r.done, (int)r.stopped);
+    }
+    { // the 3rd slice fails: the first two stay locked and are reported, nothing after the failure is attempted
+        int calls = 0;
+        const LockProgress r = lock_in_slices(mem.data(), 1000, nullptr, 300, [&](u8*, u64) { return ++calls != 3; });
+        CHECK(calls == 3 && r.done == 600 && r.failed && !r.stopped, "failure in slice 3: %d calls, done %llu", calls,
+              (unsigned long long)r.done);
+    }
+    const u64 bytes = 16ull << 20;
+    { // the real allocation with Stop already raised: usable memory back, not locked, and the note says why
+        std::atomic<bool> stop{true};
+        bool got = true, locked = true;
+        std::string note;
+        void* p = plat::alloc(bytes, false, got, locked, note, &stop);
+        CHECK(p != nullptr && !got && !locked && note.find("stopped") != std::string::npos,
+              "alloc with stop raised: p=%p got=%d locked=%d note='%s'", p, (int)got, (int)locked, note.c_str());
+        if (p) {
+            memset(p, 0xA5, bytes);
+            plat::release(p, bytes);
+        }
+    }
+    { // and without it (no limit on locked memory is promised here): it either locks or explains why it did not
+        std::atomic<bool> stop{false};
+        bool got = true, locked = false;
+        std::string note;
+        void* p = plat::alloc(bytes, false, got, locked, note, &stop);
+        CHECK(p != nullptr && !got && (locked || !note.empty()) && note.find("stopped") == std::string::npos,
+              "alloc without stop: p=%p got=%d locked=%d note='%s'", p, (int)got, (int)locked, note.c_str());
+        if (p) {
+            memset(p, 0x5A, bytes);
+            plat::release(p, bytes);
+        }
+    }
+}
+
 // FPU stress kernel (D6). Left alone, x = x * m + k grows by ~1.2e-7 per step and a register reaches +inf after ~8e8
 // steps
 // (~40,100 outer loops), after which it never changes again. The kernel re-seeds the registers every kFpuReseedLoops
@@ -1219,6 +1316,7 @@ int main() {
     test_run_status();
     test_exceptions();
     test_sync_protocol();
+    test_lock_slices();
     test_fpu_kernel();
     test_report();
     test_fill_opts();

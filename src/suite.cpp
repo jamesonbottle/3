@@ -159,6 +159,8 @@ struct SuiteDriver {
     u64 per = 0;   // bytes tested by each thread
     u64 total = 0; // bytes tested in all
     bool gotLP = false, locked = false;
+    bool stoppedInAlloc =
+        false; // Stop was requested and the memory is not locked: the lock was cut short (or failed anyway)
     std::string allocNote;
     int failedTests = 0;
     std::vector<std::string> failedNames;
@@ -311,9 +313,12 @@ struct SuiteDriver {
     }
 
     bool allocate() {
-        R.layout.region = (u8*)plat::alloc(total, cfg.large, gotLP, locked, allocNote);
+        // Stop is passed in so that locking tens of GB can be cut short (platform.h). The region is still returned
+        // then: prepare_region() and run_tests() already start nothing once stop is set.
+        R.layout.region = (u8*)plat::alloc(total, cfg.large, gotLP, locked, allocNote, &R.stop);
         if (!R.layout.region)
             R.log.emitf("allocation of %llu MB failed\n", (unsigned long long)(total >> 20));
+        stoppedInAlloc = !locked && R.stop.load(std::memory_order_relaxed);
         return R.layout.region != nullptr;
     }
     void release_region() {
@@ -327,7 +332,9 @@ struct SuiteDriver {
         R.layout.regionBytes.store(total, std::memory_order_release);
         R.log.emitf("memory %s, large pages: %s\n",
                     locked ? "locked"
-                           : "NOT locked (the OS may page parts of it out; close other programs or lower Megabytes)",
+                    : stoppedInAlloc
+                        ? "NOT locked (stopped before the locking was done)"
+                        : "NOT locked (the OS may page parts of it out; close other programs or lower Megabytes)",
                     gotLP       ? "yes (2MB contiguous physical runs)"
                     : cfg.large ? "no (needs 'Lock pages in memory' right; using normal pages)"
                                 : "off");

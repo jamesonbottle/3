@@ -98,16 +98,28 @@ u64 total_phys() {
     return sysconf_bytes(_SC_PHYS_PAGES);
 }
 void lower_priority() {}
-void* alloc(u64 bytes, bool, bool& got, bool& locked, std::string& note) {
+void* alloc(u64 bytes, bool, bool& got, bool& locked, std::string& note, const std::atomic<bool>* stop) {
     got = false;
     locked = false;
     void* p = mmap(nullptr, bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (p == MAP_FAILED)
         return nullptr;
     madvise(p, bytes, MADV_HUGEPAGE);
-    locked = mlock(p, bytes) == 0;
-    if (!locked)
-        note = std::string("mlock failed: ") + strerror(errno) + " (see ulimit -l / RLIMIT_MEMLOCK)";
+    int err = 0;
+    const LockProgress lp = lock_in_slices((u8*)p, bytes, stop, kLockSlice, [&](u8* q, u64 n) {
+        if (mlock(q, n) == 0)
+            return true;
+        err = errno;
+        return false;
+    });
+    locked = !lp.failed && !lp.stopped;
+    const std::string of =
+        lp.done ? " after " + std::to_string(lp.done >> 20) + " of " + std::to_string(bytes >> 20) + " MB" : "";
+    if (lp.failed)
+        note = "mlock failed" + of + ": " + strerror(err) + " (see ulimit -l / RLIMIT_MEMLOCK)";
+    else if (lp.stopped)
+        note = "stopped while locking the memory (" + std::to_string(lp.done >> 20) + " of " +
+               std::to_string(bytes >> 20) + " MB locked)";
     return p;
 }
 void release(void* p, u64 b) {

@@ -94,9 +94,11 @@ static bool lock_priv() {
 }
 // got = large pages obtained; locked = the memory is really pinned in RAM (large pages always are; otherwise
 // VirtualLock/mlock must have succeeded)
-void* alloc(u64 bytes, bool large, bool& got, bool& locked, std::string& note) {
+void* alloc(u64 bytes, bool large, bool& got, bool& locked, std::string& note, const std::atomic<bool>* stop) {
     got = false;
     locked = false;
+    // The large-page allocation below is ONE OS call (it commits and zeroes everything), so Stop cannot cut it short;
+    // only the locking of ordinary pages further down is done in slices.
     if (large && lock_priv()) {
         SIZE_T lp = GetLargePageMinimum();
         if (lp) {
@@ -115,11 +117,25 @@ void* alloc(u64 bytes, bool large, bool& got, bool& locked, std::string& note) {
         note = "SetProcessWorkingSetSizeEx failed (error " + std::to_string(GetLastError()) + ")";
     void* p = VirtualAlloc(nullptr, bytes, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
     if (p) {
-        locked = VirtualLock(p, bytes) != 0;
-        if (!locked) {
-            DWORD err = GetLastError();
-            note += std::string(note.empty() ? "" : "; ") + "VirtualLock failed (error " + std::to_string(err) + ")";
-        }
+        // VirtualLock is the first touch of every page; one call for tens of GB cannot be interrupted, so lock in
+        // slices
+        DWORD err = 0;
+        const LockProgress lp = lock_in_slices((u8*)p, bytes, stop, kLockSlice, [&](u8* q, u64 n) {
+            if (VirtualLock(q, (SIZE_T)n))
+                return true;
+            err = GetLastError();
+            return false;
+        });
+        locked = !lp.failed && !lp.stopped;
+        const std::string sep = note.empty() ? "" : "; ";
+        if (lp.failed)
+            note += sep + "VirtualLock failed" +
+                    (lp.done ? " after " + std::to_string(lp.done >> 20) + " of " + std::to_string(bytes >> 20) + " MB"
+                             : std::string()) +
+                    " (error " + std::to_string(err) + ")";
+        else if (lp.stopped)
+            note += sep + "stopped while locking the memory (" + std::to_string(lp.done >> 20) + " of " +
+                    std::to_string(bytes >> 20) + " MB locked)";
     }
     return p;
 }
