@@ -48,9 +48,14 @@ jobs:
         # tools/inject_checks.sh is the same file tools/selftest.sh runs on Linux; Git Bash is on the runner. Red if any planted fault is missed.
         shell: bash
         run: bash tools/inject_checks.sh build/ddr5test_cli_inject.exe build/inject_checks
-      - name: Smoke test (console build, quick suite, 64 MB)
+      - name: Smoke test (console build, quick suite, 64 MB; the run must ask Windows to stay awake)
         shell: cmd
-        run: build\ddr5test_cli.exe -mb 64 -t 2 --quick --minutes 1 --no-large-pages || exit /b 1
+        run: |
+          build\ddr5test_cli.exe -mb 64 -t 2 --quick --minutes 1 --no-large-pages > smoke_quick.out 2>&1
+          set rc=%errorlevel%
+          type smoke_quick.out
+          if not "%rc%"=="0" exit /b 1
+          findstr /C:"keeping the system awake" smoke_quick.out || exit /b 1
       - name: Smoke test (--list, and a given seed is echoed back)
         shell: cmd
         run: |

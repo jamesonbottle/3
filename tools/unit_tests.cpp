@@ -23,6 +23,13 @@
 #include "stop_gate.h"
 #include "suite.h"
 #include "types.h"
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h> // SetThreadExecutionState, to look at the state keep_awake() sets
+#endif
 
 using namespace ddr5;
 
@@ -1361,6 +1368,25 @@ static void test_stop_gate() {
     }
 }
 
+// plat::keep_awake (C1): POSIX has nothing to do; on Windows the request is really on the calling thread and clearing
+// removes it.
+static void test_keep_awake() {
+#ifdef _WIN32
+    CHECK(plat::keep_awake(true) == plat::KeepAwake::On, "keep_awake(true) must be accepted by the OS");
+    // SetThreadExecutionState returns the state that was in force before the call; the probe re-applies the same state
+    EXECUTION_STATE st = SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED);
+    CHECK((st & ES_SYSTEM_REQUIRED) != 0, "ES_SYSTEM_REQUIRED must be set after keep_awake(true) (state 0x%lx)",
+          (unsigned long)st);
+    plat::keep_awake(false);
+    st = SetThreadExecutionState(ES_CONTINUOUS); // probe: looks at the cleared state and leaves it cleared
+    CHECK((st & ES_SYSTEM_REQUIRED) == 0, "ES_SYSTEM_REQUIRED must be gone after keep_awake(false) (state 0x%lx)",
+          (unsigned long)st);
+#else
+    CHECK(plat::keep_awake(true) == plat::KeepAwake::NotSupported, "POSIX has nothing to keep awake");
+    plat::keep_awake(false);
+#endif
+}
+
 int main() {
     test_log.sink = [](const std::string& s) {
         printf("  (engine) %s", s.c_str());
@@ -1382,6 +1408,7 @@ int main() {
     test_sync_protocol();
     test_lock_slices();
     test_stop_gate();
+    test_keep_awake();
     test_fpu_kernel();
     test_report();
     test_fill_opts();

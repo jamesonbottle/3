@@ -181,6 +181,18 @@ struct SuiteDriver {
             if (!open_error_log())
                 return 2;
             ScopeExit logGuard([&] { close_error_log(); });
+            // Soak runs last hours with nobody at the keyboard: the OS must not sleep under them. Taken here, before
+            // the (long) allocation, and by this thread, because the OS ties the request to the calling thread.
+            const plat::KeepAwake awake = plat::keep_awake(true);
+            ScopeExit awakeGuard([&] {
+                if (awake == plat::KeepAwake::On)
+                    plat::keep_awake(false);
+            });
+            if (awake == plat::KeepAwake::On)
+                R.log.emitf("keeping the system awake while the test runs (the display may still turn off)\n");
+            else if (awake == plat::KeepAwake::Failed)
+                R.log.emitf("warning: could not stop the system from sleeping; a power-plan sleep timeout would "
+                            "interrupt the run\n");
             configure_run();
             if (!size_region())
                 return 2;

@@ -73,6 +73,12 @@ u64 total_phys() {
     MEMORYSTATUSEX m;
     return mem_status(m) ? m.ullTotalPhys : 0;
 }
+KeepAwake keep_awake(bool on) {
+    // ES_CONTINUOUS keeps the state until it is changed again (or the thread ends); without ES_SYSTEM_REQUIRED the
+    // clearing call drops the request. Returns the previous state, or NULL when the call failed.
+    const EXECUTION_STATE r = SetThreadExecutionState(on ? (ES_CONTINUOUS | ES_SYSTEM_REQUIRED) : ES_CONTINUOUS);
+    return !on ? KeepAwake::NotSupported : (r ? KeepAwake::On : KeepAwake::Failed);
+}
 void lower_priority() {
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
 }

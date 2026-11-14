@@ -98,6 +98,9 @@ u64 total_phys() {
     return sysconf_bytes(_SC_PHYS_PAGES);
 }
 void lower_priority() {}
+KeepAwake keep_awake(bool) {
+    return KeepAwake::NotSupported;
+}
 void* alloc(u64 bytes, bool, bool& got, bool& locked, std::string& note, const std::atomic<bool>* stop) {
     got = false;
     locked = false;

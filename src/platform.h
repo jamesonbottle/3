@@ -21,6 +21,13 @@ bool pin(int cpu);
 u64 avail_phys();
 u64 total_phys();
 void lower_priority();
+// Keep the machine from going to sleep because nobody touched it (Windows: SetThreadExecutionState with
+// ES_SYSTEM_REQUIRED, which the OS takes per calling thread, so the thread that runs the test must make both calls).
+// The display may still turn off, and the user can still sleep the machine (power button, lid, Start menu).
+//   keep_awake(true):  On = requested; Failed = the OS refused; NotSupported = this platform has nothing to do (POSIX).
+//   keep_awake(false): clears the request (always safe to call). The return value is meaningless then.
+enum class KeepAwake { NotSupported, On, Failed };
+KeepAwake keep_awake(bool on);
 // Locking is the first touch of every page, so for tens of GB it takes many seconds. It is done in slices of kLockSlice
 // bytes, and a Stop request is looked at between two of them.
 inline constexpr u64 kLockSlice = 64ull << 20;
