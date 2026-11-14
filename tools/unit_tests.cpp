@@ -115,8 +115,17 @@ static void test_windows() {
 // The 'sat' pattern table: every selectable (pattern, width) pair yields a non-empty, finite pattern and inverse data
 // is the exact complement.
 static void test_generators() {
-    for (auto& sp : sat_table())
-        CHECK(sp.len >= 1 && sp.len <= 64, "pattern %s len=%d", sp.name, sp.len);
+    for (auto& sp : sat_table()) {
+        CHECK(sp.len >= 1 && sp.len <= 64 && !(sp.len & (sp.len - 1)), "pattern %s len=%d (must be a power of two)",
+              sp.name, sp.len);
+        // the mask in sat_word must give exactly what the plain modulo of the pattern's definition gives
+        u64 bad = 0;
+        for (int rep = 0; rep < 4; rep++)
+            for (u64 idx = 0; idx < 4096; idx++)
+                bad += sat_word(sp, idx, rep) != sp.w[(idx >> rep) % (u64)sp.len];
+        CHECK(!bad, "pattern %s: sat_word differs from the modulo form in %llu cases", sp.name,
+              (unsigned long long)bad);
+    }
     Gen g;
     g.kind = 1;
     g.seed = 99;

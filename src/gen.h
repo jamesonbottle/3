@@ -24,8 +24,11 @@ struct SatPat {
     int weight[4];
 };
 const std::vector<SatPat>& sat_table();
+// Every table length is a power of two (1, 2, 4 or 64; sat_table() aborts otherwise), so the index wraps with a mask: a
+// runtime `%` here is a 64-bit division per 32-bit word and halved the speed of the cached pattern tests (AUDIT_PLAN
+// D2).
 static inline u32 sat_word(const SatPat& p, u64 idx, int rep) {
-    return p.w[(idx >> rep) % (u64)p.len];
+    return p.w[(idx >> rep) & (u64)(p.len - 1)];
 }
 
 struct Gen {
