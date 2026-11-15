@@ -61,6 +61,10 @@ enum Ids {
 const UINT WM_RUN_DONE = WM_APP + 1;
 const UINT_PTR TIMER_ID = 1;
 const wchar_t* const APP_TITLE = L"DDR5 RAM Test";
+const wchar_t* const WND_CLASS = L"Ddr5RamTestWindow";
+// Global\ so that a copy in another user session (fast user switching, RDP) counts too: two memory tests at once would
+// each size themselves from the free memory and fight over it.
+const wchar_t* const ONCE_MUTEX = L"Global\\Ddr5RamTestSingleInstance";
 
 struct App {
     HINSTANCE inst = nullptr;
@@ -575,9 +579,39 @@ LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     return DefWindowProcW(h, msg, wp, lp);
 }
 
+// A copy is already running: bring its window forward (restoring it when minimised). The first copy creates the mutex
+// before its window, so a second one started at the same moment waits a little for the window. If there is no window on
+// this desktop (the other copy runs in another session, or as another user), say so instead.
+void activate_running_copy() {
+    HWND w = nullptr;
+    for (int i = 0; i < 20 && !w; i++) {
+        w = FindWindowW(WND_CLASS, nullptr);
+        if (!w)
+            Sleep(100);
+    }
+    if (!w) {
+        MessageBoxW(nullptr, L"DDR5 RAM Test is already running (in another user session, or as another user).",
+                    APP_TITLE, MB_OK | MB_ICONINFORMATION);
+        return;
+    }
+    if (IsIconic(w))
+        ShowWindow(w, SW_RESTORE);
+    SetForegroundWindow(w); // Windows may only flash the taskbar button when another program holds the foreground
+}
+
 } // namespace
 
 int WINAPI WinMain(HINSTANCE inst, HINSTANCE, LPSTR, int show) {
+    // One copy at a time. The handle is kept until the process ends (the OS releases the mutex then, also after a
+    // crash). ERROR_ACCESS_DENIED = the mutex exists but belongs to another security context (for example an elevated
+    // copy).
+    SetLastError(0);
+    HANDLE once = CreateMutexW(nullptr, FALSE, ONCE_MUTEX);
+    const DWORD onceErr = GetLastError();
+    if (onceErr == ERROR_ALREADY_EXISTS || (!once && onceErr == ERROR_ACCESS_DENIED)) {
+        activate_running_copy();
+        return 0;
+    }
     A.inst = inst;
     INITCOMMONCONTROLSEX icc{sizeof icc, ICC_TAB_CLASSES | ICC_UPDOWN_CLASS | ICC_STANDARD_CLASSES};
     InitCommonControlsEx(&icc);
@@ -593,7 +627,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE, LPSTR, int show) {
     wc.hInstance = inst;
     wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
     wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
-    wc.lpszClassName = L"Ddr5RamTestWindow";
+    wc.lpszClassName = WND_CLASS;
     wc.hIcon = LoadIcon(nullptr, IDI_APPLICATION);
     wc.hIconSm = wc.hIcon;
     RegisterClassExW(&wc);

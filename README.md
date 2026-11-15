@@ -6,7 +6,7 @@ The window follows the familiar two-tab layout (Testing / Advanced) used by popu
 
 ## Use
 
-1. Run `ddr5ramtest.exe`. Close other programs first.
+1. Run `ddr5ramtest.exe`. Close other programs first. Only one copy runs at a time (two tests would fight over the same free memory): starting a second copy brings the first window forward instead, or says so in a message box when the other copy is in another user session. The console tool is not covered by this.
 2. Pick *Threads* (default: logical CPUs). *Megabytes* fills itself with ~90 % of free RAM (at least 512 MB always stay free for Windows and the window itself), split evenly per thread, and follows the thread count; type a value to override it, or clear the box to go back to automatic.
 3. Press **Start**. It runs until you press **Stop**. Coverage is how many times the tested region has been verified (100 % = one full pass; it keeps counting past that).
 4. Any error is written to `ddr5ramtest.log` next to the exe (or to `%TEMP%` if that folder is not writable - the status line says which), with address (and the line's byte offset in the tested region, which stays the same between runs with the same seed and size), expected/actual data, which DQ lane/beat was hit, which x8-device on-die-ECC codeword that would be *if* the DIMM uses x8 chips and the controller does not swizzle lanes (a heuristic, see *Honest limits*), and whether a re-read shows it as transient, stable or unstable.
