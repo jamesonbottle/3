@@ -22,6 +22,7 @@
 #include "platform.h"
 #include "run.h"
 #include "sizing.h"
+#include "start_guard.h"
 #include "stop_gate.h"
 #include "suite.h"
 #include "types.h"
@@ -226,6 +227,34 @@ u64 read_uint(HWND edit, u64 lo, u64 hi, u64 def) {
     return std::min(std::max(v, lo), hi);
 }
 
+// Text of a std::exception (the system's ANSI code page) as UTF-16 for a message box.
+std::wstring from_ansi(const std::string& s) {
+    if (s.empty())
+        return L"";
+    const int n = MultiByteToWideChar(CP_ACP, 0, s.data(), (int)s.size(), nullptr, 0);
+    if (n <= 0)
+        return std::wstring(s.begin(), s.end());
+    std::wstring w((size_t)n, L'\0');
+    MultiByteToWideChar(CP_ACP, 0, s.data(), (int)s.size(), &w[0], n);
+    return w;
+}
+
+// start_run could not create the Run or its worker thread (F2). The window was never switched to "running", so the
+// only thing left to undo is the log file opened for this attempt; the Start button is still enabled.
+void abort_start(const std::string& why) {
+    {
+        std::lock_guard<std::mutex> l(A.logMu);
+        if (A.log) {
+            fprintf(A.log, "run did not start: %s\n", why.c_str()); // best effort, the header line is already there
+            fclose(A.log);
+            A.log = nullptr;
+        }
+    }
+    setText(A.hTest, L"Could not run");
+    const std::wstring msg = L"The test could not start (" + from_ansi(why) + L").";
+    MessageBoxW(A.wnd, msg.c_str(), APP_TITLE, MB_OK | MB_ICONWARNING);
+}
+
 void start_run() {
     if (A.busy.load())
         return;
@@ -291,7 +320,29 @@ void start_run() {
             A.lastLine = t.substr(b, e - b + 1);
         }
     };
-    A.run = std::make_unique<Run>(A.logger);
+    // Everything that can throw (the Run's memory, the OS refusing a new thread) happens here, into locals, BEFORE the
+    // window is switched to "running": a failed start then leaves the UI as it was (Start enabled, nothing waiting for
+    // a WM_RUN_DONE that would never come). The worker may already be running when the state below is set; that is
+    // safe because this is the UI thread, so its WM_RUN_DONE is handled only after start_run() has returned.
+    std::unique_ptr<Run> run;
+    std::thread worker;
+    const HWND wnd = A.wnd;
+    std::string why;
+    if (!try_start(
+            [&] {
+                run = std::make_unique<Run>(A.logger);
+                Run* R = run.get();
+                worker = std::thread([s, R, wnd] {
+                    int rc = run_suite(s, *R);
+                    PostMessageW(wnd, WM_RUN_DONE, (WPARAM)rc, 0);
+                });
+            },
+            why)) {
+        abort_start(why);
+        return;
+    }
+    A.run = std::move(run);       // the previous run's worker was joined at the top, nothing uses the old Run any more
+    A.worker = std::move(worker); // not joinable here (joined above), so this assignment cannot terminate
     A.lastErr = 0;
     A.stopRequested = false;
     A.endT = 0;
@@ -303,12 +354,6 @@ void start_run() {
     A.busy = true;
     A.gate.on_run_start();
     set_running_ui(true);
-    Run* R = A.run.get();
-    HWND wnd = A.wnd;
-    A.worker = std::thread([s, R, wnd] {
-        int rc = run_suite(s, *R);
-        PostMessageW(wnd, WM_RUN_DONE, (WPARAM)rc, 0);
-    });
 }
 
 void request_stop() {

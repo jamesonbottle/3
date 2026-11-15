@@ -11,6 +11,10 @@
 #include <mutex>
 #include <atomic>
 #include <chrono>
+#include <memory>
+#include <new>
+#include <stdexcept>
+#include <system_error>
 #include "algo.h"
 #include "cpu_check.h"
 #include "cpu_set.h"
@@ -23,6 +27,7 @@
 #include "run.h"
 #include "seed.h"
 #include "sizing.h"
+#include "start_guard.h"
 #include "stop_gate.h"
 #include "suite.h"
 #include "types.h"
@@ -1464,6 +1469,64 @@ static void test_report() {
     }
 }
 
+// try_start (GUI start_run, F2): a throwing step (no memory for the Run, the OS refusing a thread) is caught and
+// reported, nothing escapes, and whatever the step built into locals before it threw is simply dropped.
+static void test_start_guard() {
+    std::string why = "stale";
+    int ran = 0;
+    CHECK(try_start([&] { ran++; }, why) && ran == 1 && why.empty(),
+          "a step that works must return true, run exactly once and leave `why` empty (got '%s')", why.c_str());
+    CHECK(
+        !try_start(
+            [] { throw std::system_error(std::make_error_code(std::errc::resource_unavailable_try_again), "thread"); },
+            why) &&
+            why.find("thread") != std::string::npos,
+        "a refused thread (std::system_error) must return false with its text in `why` (got '%s')", why.c_str());
+    CHECK(!try_start([] { throw std::bad_alloc(); }, why) && !why.empty(),
+          "bad_alloc must return false with a non-empty reason");
+    CHECK(!try_start([] { throw 42; }, why) && why == "unknown error",
+          "a non-std exception must return false with 'unknown error' (got '%s')", why.c_str());
+    struct Silent : std::exception {
+        const char* what() const noexcept override { return ""; }
+    };
+    CHECK(!try_start([] { throw Silent(); }, why) && why == "unknown error",
+          "an exception with an empty text must still give a reason (got '%s')", why.c_str());
+    CHECK(try_start([] {}, why) && why.empty(), "`why` must be cleared by a later successful start");
+    { // the pattern of start_run: build into locals, commit only on success
+        std::unique_ptr<int> run, committed;
+        std::thread worker;
+        const bool ok = try_start(
+            [&] {
+                run = std::make_unique<int>(7);
+                worker = std::thread([] {});
+                throw std::runtime_error("second step failed");
+            },
+            why);
+        if (ok)
+            committed = std::move(run);
+        CHECK(!ok && !committed && why == "second step failed", "a failed start must not commit anything (got '%s')",
+              why.c_str());
+        if (worker.joinable())
+            worker.join(); // a thread built before the throw must be joined by the caller, as start_run's locals are
+    }
+    { // success: what the step built is usable afterwards
+        std::unique_ptr<int> run;
+        std::thread worker;
+        std::atomic<int> seen{0};
+        const bool ok = try_start(
+            [&] {
+                run = std::make_unique<int>(7);
+                const int* r = run.get();
+                worker = std::thread([&seen, r] { seen = *r; });
+            },
+            why);
+        CHECK(ok && worker.joinable(), "a successful start must leave a joinable worker in the caller's local");
+        if (worker.joinable())
+            worker.join();
+        CHECK(seen == 7, "the worker must have run on the Run built by the step (saw %d)", seen.load());
+    }
+}
+
 // StopGate (GUI Stop / close rules, B2): the UI never waits for the worker, a second click only forces after the delay,
 // close waits for the run's done message.
 static void test_stop_gate() {
@@ -1626,6 +1689,7 @@ int main() {
     test_sync_protocol();
     test_lock_slices();
     test_sizing();
+    test_start_guard();
     test_stop_gate();
     test_keep_awake();
     test_cpu_set();
