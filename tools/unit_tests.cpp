@@ -13,6 +13,7 @@
 #include <chrono>
 #include "algo.h"
 #include "cpu_check.h"
+#include "cpu_set.h"
 #include "flush.h"
 #include "lineio.h"
 #include "gen.h"
@@ -1528,6 +1529,64 @@ static void test_stop_gate() {
 
 // plat::keep_awake (C1): POSIX has nothing to do; on Windows the request is really on the calling thread and clearing
 // removes it.
+// The allowed-CPU set (cpu_set.h) that decides which CPU thread N is pinned to, and the real ncpu() / pin() of this
+// platform.
+static void test_cpu_set() {
+    using namespace cpuset;
+    CHECK(low_bits(0) == 0 && low_bits(1) == 1 && low_bits(63) == (~0ull >> 1) && low_bits(64) == ~0ull &&
+              low_bits(70) == ~0ull,
+          "low_bits must cover 0..64 and not shift by 64 or more");
+    // expand: group order, then bit order, gaps skipped
+    {
+        const std::vector<CpuRef> v = expand({GroupMask{0, 0b1010}, GroupMask{1, 0b101}});
+        const std::vector<CpuRef> want = {CpuRef{0, 1}, CpuRef{0, 3}, CpuRef{1, 0}, CpuRef{1, 2}};
+        CHECK(v == want, "expand must list (group, bit) in group order and bit order, skipping unset bits");
+        CHECK(expand({}).empty() && expand({GroupMask{3, 0}}).empty(), "no groups / an empty mask give no CPUs");
+        CHECK(expand({GroupMask{2, ~0ull}}).size() == 64 && expand({GroupMask{2, ~0ull}}).back() == (CpuRef{2, 63}),
+              "a full group holds 64 CPUs, the last one is bit 63");
+    }
+    // restrict_to: groups missing from the limit are dropped, the rest are intersected, empty results vanish
+    {
+        const std::vector<GroupMask> a = {GroupMask{0, 0xFF}, GroupMask{1, 0xF0}, GroupMask{2, 0x3}};
+        const std::vector<GroupMask> r = restrict_to(a, {GroupMask{0, 0x0F}, GroupMask{1, 0x0F}});
+        CHECK(
+            r.size() == 1 && r[0].group == 0 && r[0].mask == 0x0F,
+            "group 2 is not in the limit, group 1 intersects to nothing: only group 0 (0x0F) is left (got %zu groups)",
+            r.size());
+        const std::vector<GroupMask> same =
+            restrict_to(a, {GroupMask{0, ~0ull}, GroupMask{1, ~0ull}, GroupMask{2, ~0ull}});
+        CHECK(same.size() == 3 && same[0].mask == 0xFF && same[1].mask == 0xF0 && same[2].mask == 0x3,
+              "a limit that allows everything changes nothing");
+        CHECK(restrict_to(a, {}).empty(), "an empty limit leaves nothing (the caller must not believe that)");
+        const std::vector<GroupMask> twice =
+            restrict_to({GroupMask{0, 0xFF}}, {GroupMask{0, 0x0F}, GroupMask{0, 0x30}});
+        CHECK(twice.size() == 1 && twice[0].mask == 0x3F,
+              "two limit entries for one group add up before the intersection");
+    }
+    // nth: the idx-th CPU, wrapping; no answer for an empty set or a negative index
+    {
+        const std::vector<CpuRef> v = expand({GroupMask{0, 0b110}, GroupMask{1, 0b1}}); // (0,1) (0,2) (1,0)
+        CHECK(*nth(v, 0) == (CpuRef{0, 1}) && *nth(v, 1) == (CpuRef{0, 2}) && *nth(v, 2) == (CpuRef{1, 0}),
+              "thread 0, 1, 2 get the 1st, 2nd, 3rd allowed CPU, not CPU numbers 0, 1, 2");
+        CHECK(*nth(v, 3) == (CpuRef{0, 1}) && *nth(v, 7) == (CpuRef{0, 2}), "more threads than CPUs wrap round");
+        CHECK(nth(v, -1) == nullptr && nth({}, 0) == nullptr, "negative index and empty set give no CPU");
+    }
+    // The real platform: ncpu() is at least 1, and every thread number up to twice that (wrapping) can be pinned. Done
+    // in a thread of its own so the main thread keeps its affinity.
+    {
+        const int n = plat::ncpu();
+        CHECK(n >= 1, "ncpu() must be at least 1 (got %d)", n);
+        bool all = true, neg = true;
+        std::thread th([&] {
+            for (int i = 0; i < 2 * n && all; i++)
+                all = plat::pin(i);
+            neg = plat::pin(-1);
+        });
+        th.join();
+        CHECK(all, "pin(i) must succeed for i < 2 * ncpu(): the cpu-th allowed CPU, wrapping round");
+        CHECK(!neg, "pin(-1) must report not pinned");
+    }
+}
 static void test_keep_awake() {
 #ifdef _WIN32
     CHECK(plat::keep_awake(true) == plat::KeepAwake::On, "keep_awake(true) must be accepted by the OS");
@@ -1569,6 +1628,7 @@ int main() {
     test_sizing();
     test_stop_gate();
     test_keep_awake();
+    test_cpu_set();
     test_fpu_kernel();
     test_report();
     test_fill_opts();

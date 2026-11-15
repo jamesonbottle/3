@@ -9,6 +9,8 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <thread>
+#include <vector>
+#include "cpu_set.h"
 #include "platform.h"
 
 namespace ddr5 {
@@ -31,33 +33,72 @@ void install_ctrlc(std::atomic<bool>* s) {
     g_stop = s;
     SetConsoleCtrlHandler(ctrl, TRUE);
 }
+// The CPUs this process may run on, read once (the first call comes before any worker exists; thread affinity does not
+// change what the process may use anyway):
+//  - the processor groups the process belongs to (GetProcessGroupAffinity);
+//  - a process in ONE group: its affinity mask (`start /affinity`, SetProcessAffinityMask, a job's CPU limit that was
+//    applied to it); a process spanning several groups has no mask to read, so all active CPUs of those groups count;
+//  - a job object with a group / CPU list (JobObjectGroupInformationEx) confines that further. Best effort: a job that
+//    reports nothing, or an answer that would leave no CPU at all, changes nothing.
+// A CPU rate cap (a job's "x % of the CPU") is NOT a CPU count and is not looked at.
+// If the OS calls give nothing usable the set is every active CPU of the machine, which is what ncpu() used to return.
+// What the job object the process runs in allows (JobObjectGroupInformationEx = 14: an array of GROUP_AFFINITY). false
+// = not in a job, no such limit, or the query failed.
+static bool job_group_limit(std::vector<cpuset::GroupMask>& out) {
+    GROUP_AFFINITY ga[64];
+    DWORD len = 0;
+    if (!QueryInformationJobObject(nullptr, (JOBOBJECTINFOCLASS)14, ga, sizeof ga, &len) ||
+        len < sizeof(GROUP_AFFINITY))
+        return false;
+    for (DWORD i = 0; i < len / sizeof(GROUP_AFFINITY); i++)
+        out.push_back(cpuset::GroupMask{(unsigned)ga[i].Group, (u64)ga[i].Mask});
+    return true;
+}
+static const std::vector<cpuset::CpuRef>& allowed_cpus() {
+    static const std::vector<cpuset::CpuRef> cpus = [] {
+        std::vector<cpuset::GroupMask> groups;
+        USHORT arr[64];
+        USHORT cnt = 64;
+        if (GetProcessGroupAffinity(GetCurrentProcess(), &cnt, arr) && cnt > 0) {
+            DWORD_PTR pm = 0, sm = 0;
+            const bool haveMask = cnt == 1 && GetProcessAffinityMask(GetCurrentProcess(), &pm, &sm) != 0;
+            for (USHORT i = 0; i < cnt; i++) {
+                const u64 active = cpuset::low_bits(GetActiveProcessorCount(arr[i]));
+                groups.push_back(cpuset::GroupMask{(unsigned)arr[i], haveMask ? ((u64)pm & active) : active});
+            }
+        }
+        std::vector<cpuset::GroupMask> limit;
+        if (!groups.empty() && job_group_limit(limit)) {
+            std::vector<cpuset::GroupMask> r = cpuset::restrict_to(groups, limit);
+            if (!r.empty()) // an answer with no CPU in it is not believed
+                groups = r;
+        }
+        std::vector<cpuset::CpuRef> v = cpuset::expand(groups);
+        if (v.empty()) { // the queries gave nothing usable: every active CPU of the machine
+            groups.clear();
+            const WORD ng = GetActiveProcessorGroupCount();
+            for (WORD g = 0; g < ng; g++)
+                groups.push_back(cpuset::GroupMask{(unsigned)g, cpuset::low_bits(GetActiveProcessorCount(g))});
+            v = cpuset::expand(groups);
+        }
+        return v;
+    }();
+    return cpus;
+}
 int ncpu() {
-    DWORD n = GetActiveProcessorCount(ALL_PROCESSOR_GROUPS);
+    const size_t n = allowed_cpus().size();
     return n ? (int)n : (int)std::thread::hardware_concurrency();
 }
-// Pin thread number `cpu` to logical CPU `cpu`, counting across processor groups (Windows splits machines with >64
-// logical CPUs into groups). false = not pinned: the call failed, or there is no such CPU (more threads than CPUs).
+// Pin the calling thread to the cpu-th allowed CPU, counting across processor groups and wrapping round when there are
+// more threads than CPUs (the same rule as on Linux). false = not pinned: the call failed, or there is no CPU list.
 bool pin(int cpu) {
-    if (cpu < 0)
+    const cpuset::CpuRef* c = cpuset::nth(allowed_cpus(), cpu);
+    if (!c)
         return false;
-    WORD ng = GetActiveProcessorGroupCount();
-    if (ng <= 1) {
-        if (cpu >= 64) // a single group holds at most 64 CPUs
-            return false;
-        return SetThreadAffinityMask(GetCurrentThread(), 1ull << cpu) != 0;
-    }
-    int idx = cpu;
-    for (WORD g = 0; g < ng; g++) {
-        int n = (int)GetActiveProcessorCount(g);
-        if (idx < n) {
-            GROUP_AFFINITY ga{};
-            ga.Group = g;
-            ga.Mask = (KAFFINITY)1 << idx;
-            return SetThreadGroupAffinity(GetCurrentThread(), &ga, nullptr) != 0;
-        }
-        idx -= n;
-    }
-    return false;
+    GROUP_AFFINITY ga{};
+    ga.Group = (WORD)c->group;
+    ga.Mask = (KAFFINITY)1 << c->bit;
+    return SetThreadGroupAffinity(GetCurrentThread(), &ga, nullptr) != 0;
 }
 // false = the call failed; the caller must then report "unknown", not "0 bytes free"
 static bool mem_status(MEMORYSTATUSEX& m) {

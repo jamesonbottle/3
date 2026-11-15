@@ -56,6 +56,18 @@ jobs:
           type smoke_quick.out
           if not "%rc%"=="0" exit /b 1
           findstr /C:"keeping the system awake" smoke_quick.out || exit /b 1
+      - name: Smoke test (process affinity, one allowed CPU means one thread pinned to that CPU)
+        # `start /affinity 2` confines the process to logical CPU 1. ncpu() must follow that (1 thread, not the runner's CPU
+        # count) and pin() must use CPU 1, not CPU 0, which the process may not use (no "could not be pinned" warning).
+        shell: cmd
+        run: |
+          start "" /b /wait /affinity 2 build\ddr5test_cli.exe -mb 64 --no-large-pages --test-seconds 2 -f "Solid and checker" > affinity.out 2>&1
+          set rc=%errorlevel%
+          type affinity.out
+          if not "%rc%"=="0" exit /b 1
+          findstr /B /C:"1 threads," affinity.out || exit /b 1
+          findstr /C:"could not be pinned" affinity.out && exit /b 1
+          exit /b 0
       - name: Smoke test (--list, and a given seed is echoed back)
         shell: cmd
         run: |

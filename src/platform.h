@@ -10,11 +10,13 @@ namespace ddr5 {
 
 namespace plat {
 void install_ctrlc(std::atomic<bool>* s); // Ctrl-C / SIGINT sets *s
-// Logical CPUs this process may run on: on Linux the taskset/cpuset-restricted set, not the machine's CPU count.
+// Logical CPUs this process may run on, not the machine's CPU count: on Linux the taskset/cpuset-restricted set; on
+// Windows the process affinity (`start /affinity`), the processor groups it belongs to and a job object's group limit
+// (src/cpu_set.h). A job's CPU rate cap is not a CPU count and is not counted.
 int ncpu();
-// Pin the calling thread to the cpu-th usable CPU (Linux: the cpu-th of the allowed set, wrapping round when there
-// are fewer CPUs than threads; Windows: logical CPU number `cpu` across processor groups). false = the thread was not
-// pinned (the call failed, or Windows has no such CPU): the run is still valid, the thread just may migrate.
+// Pin the calling thread to the cpu-th usable CPU: the cpu-th of the allowed set (Windows: across processor groups),
+// wrapping round when there are fewer CPUs than threads, the same on both platforms. false = the thread was not pinned
+// (the call failed, or the allowed set could not be read): the run is still valid, the thread just may migrate.
 bool pin(int cpu);
 // Free and installed physical memory in bytes. 0 = unknown (the OS call failed): callers must not read it as "no
 // memory". Linux reports MemAvailable (free memory plus what the OS can reclaim from caches), not just the free pages.
