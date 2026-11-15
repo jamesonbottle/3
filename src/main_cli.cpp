@@ -8,6 +8,7 @@
 #include <sstream>
 #include <string>
 #include <vector>
+#include "build_version.h"
 #include "cpu_check.h"
 #include "log.h"
 #include "params.h"
@@ -33,7 +34,7 @@ static void usage() {
          "has it)\n"
          "             [--seed N|0xHEX]   (each run picks a random seed and prints it; pass it back with the same -mb "
          "/ -t to repeat the run)\n"
-         "             [--keep-going | --stop-on-error] [--no-large-pages] [--log FILE] [--list]\n"
+         "             [--keep-going | --stop-on-error] [--no-large-pages] [--log FILE] [--list] [--version]\n"
          "             (--log FILE that cannot be opened = exit 2; the default ddr5test.log that cannot be opened only "
          "warns)\n"
          "Ctrl-C stops the run after the current step and prints the summary; a second Ctrl-C ends the process at "
@@ -168,7 +169,10 @@ int main(int argc, char** argv) {
             s.logFileSet = true;
         } else if (a == "--list")
             list = true;
-        else {
+        else if (a == "--version") {
+            printf("ddr5test_cli %s\n", DDR5_VERSION);
+            return 0;
+        } else {
             usage();
             return a == "-h" || a == "--help" ? 0 : 2;
         }

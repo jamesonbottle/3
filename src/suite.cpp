@@ -10,6 +10,7 @@
 #include <thread>
 #include <vector>
 #include "algo.h"
+#include "build_version.h"
 #include "log.h"
 #include "params.h"
 #include "platform.h"
@@ -319,6 +320,7 @@ struct SuiteDriver {
             freeTxt.clear();
             appendf(freeTxt, " of %.2f GiB free", avail / 1073741824.0);
         }
+        R.log.emitf("ddr5test %s\n", DDR5_VERSION);
         R.log.emitf("%d threads, testing %.2f GiB%s, %zu tests\n", R.layout.T, total / 1073741824.0, freeTxt.c_str(),
                     sel.size());
         R.log.emitf(
@@ -391,8 +393,8 @@ struct SuiteDriver {
                 std::memset(R.layout.chunks[tid].base + off, 0, std::min(slice, per - off));
         });
         std::string hdr;
-        appendf(hdr, "---- ddr5test run, %.2f GiB, %d threads, seed 0x%016llX ----\n", total / 1073741824.0, R.layout.T,
-                (unsigned long long)runSeed);
+        appendf(hdr, "---- ddr5test run, %.2f GiB, %d threads, seed 0x%016llX, version %s ----\n", total / 1073741824.0,
+                R.layout.T, (unsigned long long)runSeed, DDR5_VERSION);
         R.write_error_log(hdr);
     }
 

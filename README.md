@@ -92,6 +92,7 @@ src/suite.h/.cpp   run_suite() (steps in SuiteDriver), failure summary, FPU stre
 src/inject.h/.cpp  fault-injection hooks (DDR5_INJECT) for the self-test; inject.cpp is only in the injection engine
 src/main_gui.cpp   Win32 GUI              src/main_cli.cpp      console front-end
 src/stop_gate.h    rules of the GUI's Stop button / window close (header only, unit-tested)
+src/build_version.h.in  template of the generated build_version.h (version text from `git describe`, commit count): shown by `ddr5test_cli --version`, in the run header / log header and in the exe's version resource (src/app.rc)
 src/start_guard.h  the steps of the GUI's run start that can throw, run guarded (header only, unit-tested)
 src/app.rc, app.manifest   visual styles + DPI awareness
 CMakeLists.txt             engine static library (built twice: normal + fault injection), front-ends, unit tests

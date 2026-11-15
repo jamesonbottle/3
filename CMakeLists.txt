@@ -18,12 +18,40 @@ set(DDR5_SANITIZE "" CACHE STRING "Value for -fsanitize= (thread | address,undef
 # Debug check of the barrier protocol (every worker must make the same number of Run::sync() calls; see run.h). Always on in
 # builds without NDEBUG; tools/selftest.sh turns it on in every leg, release flags included. Off by default.
 option(DDR5_CHECK_SYNC "Check that all workers make the same number of sync() calls" OFF)
-# MSVC only: treat warnings as errors (off by default; CI turns it on once /W4 is clean).
+# MSVC only: treat warnings as errors (off by default; the Windows CI job turns it on through build.bat, /W4 is clean).
 option(DDR5_WARNINGS_AS_ERRORS "Build with /WX on MSVC" OFF)
+# Version text shown in the run header, `ddr5test_cli --version` and the exe's version resource. Empty = ask git.
+set(DDR5_VERSION "" CACHE STRING "Version string (default: git describe --tags --always --dirty, or 'unknown')")
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+
+# Version: generated header in the build directory (see src/build_version.h.in). Refreshed whenever CMake runs.
+set(DDR5_BUILD_NUMBER 0)
+find_package(Git QUIET)
+if(GIT_FOUND AND EXISTS "${CMAKE_SOURCE_DIR}/.git")
+  if(NOT DDR5_VERSION)
+    execute_process(COMMAND "${GIT_EXECUTABLE}" describe --tags --always --dirty
+                    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}" OUTPUT_VARIABLE ddr5_git_describe
+                    RESULT_VARIABLE ddr5_git_rc OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+    if(ddr5_git_rc EQUAL 0 AND ddr5_git_describe)
+      set(DDR5_VERSION "${ddr5_git_describe}")
+    endif()
+  endif()
+  execute_process(COMMAND "${GIT_EXECUTABLE}" rev-list --count HEAD
+                  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}" OUTPUT_VARIABLE ddr5_git_count
+                  RESULT_VARIABLE ddr5_git_rc2 OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+  if(ddr5_git_rc2 EQUAL 0 AND ddr5_git_count MATCHES "^[0-9]+$" AND ddr5_git_count LESS 65536)
+    set(DDR5_BUILD_NUMBER "${ddr5_git_count}")
+  endif()
+endif()
+if(NOT DDR5_VERSION)
+  set(DDR5_VERSION "unknown")
+endif()
+set(DDR5_GENERATED_DIR "${CMAKE_BINARY_DIR}/generated")
+configure_file(src/build_version.h.in "${DDR5_GENERATED_DIR}/build_version.h" @ONLY)
+message(STATUS "ddr5ramtest version: ${DDR5_VERSION} (build ${DDR5_BUILD_NUMBER})")
 
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
   set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
@@ -35,7 +63,10 @@ if(DDR5_CHECK_SYNC)
   target_compile_definitions(ddr5_flags INTERFACE DDR5_CHECK_SYNC=1)
 endif()
 if(MSVC)
-  target_compile_options(ddr5_flags INTERFACE /O2 /arch:AVX2 /EHsc /utf-8 /W4)
+  # C4324 (structure padded because of alignas) is the intent of the cache-line aligned counters; C4996 flags fopen /
+  # strerror / getenv, whose results this code checks (no _s variants needed).
+  target_compile_options(ddr5_flags INTERFACE /O2 /arch:AVX2 /EHsc /utf-8 /W4 /wd4324)
+  target_compile_definitions(ddr5_flags INTERFACE _CRT_SECURE_NO_WARNINGS)
   if(DDR5_WARNINGS_AS_ERRORS)
     target_compile_options(ddr5_flags INTERFACE /WX)
   endif()
@@ -91,7 +122,8 @@ foreach(lib ddr5_cpucheck ddr5_cpucheck_inject)
   add_library(${lib} STATIC src/cpu_check.cpp)
   target_include_directories(${lib} PUBLIC src)
   if(MSVC)
-    target_compile_options(${lib} PRIVATE /O2 /EHsc /utf-8 /W4)
+    target_compile_options(${lib} PRIVATE /O2 /EHsc /utf-8 /W4 /wd4324)
+    target_compile_definitions(${lib} PRIVATE _CRT_SECURE_NO_WARNINGS)
     if(DDR5_WARNINGS_AS_ERRORS)
       target_compile_options(${lib} PRIVATE /WX)
     endif()
@@ -106,11 +138,11 @@ endforeach()
 target_compile_definitions(ddr5_cpucheck_inject PRIVATE DDR5TEST_INJECT)
 
 add_library(ddr5engine STATIC ${ENGINE_SOURCES})
-target_include_directories(ddr5engine PUBLIC src)
+target_include_directories(ddr5engine PUBLIC src "${DDR5_GENERATED_DIR}")
 target_link_libraries(ddr5engine PUBLIC ddr5_flags ddr5_cpucheck)
 
 add_library(ddr5engine_inject STATIC ${ENGINE_SOURCES} src/inject.cpp)
-target_include_directories(ddr5engine_inject PUBLIC src)
+target_include_directories(ddr5engine_inject PUBLIC src "${DDR5_GENERATED_DIR}")
 target_link_libraries(ddr5engine_inject PUBLIC ddr5_flags ddr5_cpucheck_inject)
 target_compile_definitions(ddr5engine_inject PRIVATE DDR5TEST_INJECT)
 
@@ -129,6 +161,7 @@ if(WIN32)
   enable_language(RC)
   add_executable(ddr5ramtest WIN32 src/main_gui.cpp src/app.rc)
   target_link_libraries(ddr5ramtest PRIVATE ddr5engine)
+  target_include_directories(ddr5ramtest PRIVATE "${DDR5_GENERATED_DIR}") # app.rc includes build_version.h
   if(MSVC)
     target_link_options(ddr5ramtest PRIVATE /SUBSYSTEM:WINDOWS /MANIFEST:NO)   # the manifest is embedded by app.rc
     target_link_libraries(ddr5ramtest PRIVATE comctl32 user32 gdi32 advapi32)

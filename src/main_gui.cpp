@@ -17,6 +17,7 @@
 #include <cstdlib>
 #include <string>
 #include <vector>
+#include "build_version.h"
 #include "cpu_check.h"
 #include "log.h"
 #include "platform.h"
@@ -301,10 +302,10 @@ void start_run() {
             GetLocalTime(&st);
             if (fprintf(A.log,
                         "---- DDR5 RAM Test run %04d-%02d-%02d %02d:%02d:%02d  %llu MB, %d threads, cache=%d rng=%d "
-                        "set=%d fpu=%d stop-on-error=%d ----\n",
+                        "set=%d fpu=%d stop-on-error=%d, version %s ----\n",
                         st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond, (unsigned long long)s.megabytes,
-                        s.threads, (int)s.cacheMode, (int)s.rngMode, (int)s.suite, (int)s.stressFpu,
-                        (int)s.stopOnError) < 0 ||
+                        s.threads, (int)s.cacheMode, (int)s.rngMode, (int)s.suite, (int)s.stressFpu, (int)s.stopOnError,
+                        DDR5_VERSION) < 0 ||
                 fflush(A.log) != 0)
                 A.logFailed = true;
         }
