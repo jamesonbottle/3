@@ -20,6 +20,10 @@ bool pin(int cpu);
 // memory". Linux reports MemAvailable (free memory plus what the OS can reclaim from caches), not just the free pages.
 u64 avail_phys();
 u64 total_phys();
+// What this process can still commit, in bytes (Windows: RAM + page file, less what is already committed). 0 = unknown
+// or no such hard limit: POSIX returns 0 because Linux overcommits, so a refused mmap is dealt with by the retry in
+// sizing.h instead of by a number read beforehand.
+u64 avail_commit();
 void lower_priority();
 // Keep the machine from going to sleep because nobody touched it (Windows: SetThreadExecutionState with
 // ES_SYSTEM_REQUIRED, which the OS takes per calling thread, so the thread that runs the test must make both calls).

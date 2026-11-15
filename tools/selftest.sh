@@ -131,6 +131,27 @@ else
   echo "  SKIP  taskset not available, or fewer than 2 usable CPUs"
 fi
 
+echo "== 2f. allocation refused by the OS: retried at smaller sizes, or a clear failure"
+# An address-space limit (ulimit -v) makes mmap refuse a big region, like a full commit limit does on Windows. Not under the sanitizers: they
+# reserve terabytes of address space and cannot start under a limit. Skipped too when the machine has too little free memory for the sizes below
+# (the requested size would then be capped by the free memory and the first allocation would simply work).
+avail_kb=$(awk '/^MemAvailable:/ {print $2}' /proc/meminfo 2>/dev/null); avail_kb=${avail_kb:-0}
+if [ -n "$SAN" ]; then
+  echo "  SKIP  allocation retry (sanitizer builds cannot run under an address-space limit)"
+elif [ "$avail_kb" -lt 3145728 ]; then
+  echo "  SKIP  allocation retry (needs 3 GiB of available memory, have $((avail_kb / 1024)) MiB)"
+elif ! ( ulimit -v 262144 && "$OUT/cli" --list > /dev/null 2>&1 ); then
+  echo "  SKIP  allocation retry (the tester cannot start under a 256 MiB address-space limit here)"
+else
+  log="$OUT/c3a.log"; rm -f "$log"
+  ( ulimit -v 786432; timeout $TMO "$OUT/cli" -mb 1024 -t 2 --no-large-pages --test-seconds 2 -f "Solid and checker" --log "$log" > "$OUT/c3a.out" 2>&1 ); rc=$?
+  check "1 GiB refused under a 768 MiB limit: retried with a log line each, runs on the smaller size, exit 0, no error" '[ $rc -eq 0 ] && grep -q "^allocation of 1024 MB failed; trying " "$OUT/c3a.out" && grep -q "^testing [0-9.]* GiB instead of the 1.00 GiB planned (" "$OUT/c3a.out" && grep -q "^finished in" "$OUT/c3a.out" && ! grep -q "^ERROR" "$log" 2>/dev/null || { echo "    rc=$rc"; head -12 "$OUT/c3a.out"; false; }'
+  check "the log header and the summary name the size that was really allocated, not the planned one" '! grep -q "ddr5test run, 1.00 GiB" "$log" && grep -q "ddr5test run, 0\.[0-9]* GiB" "$log" && grep -q "of the 0\.[0-9]* GiB tested region" "$OUT/c3a.out" || { cat "$log" | head -3; tail -3 "$OUT/c3a.out"; false; }'
+  log="$OUT/c3b.log"; rm -f "$log"
+  ( ulimit -v 262144; timeout $TMO "$OUT/cli" -mb 2048 -t 2 --no-large-pages --test-seconds 2 -f "Solid and checker" --log "$log" > "$OUT/c3b.out" 2>&1 ); rc=$?
+  check "refused at every size (down to 20%): says so, exit 2, no test started" '[ $rc -eq 2 ] && grep -q "^allocation failed at every size from 2048 MB down to [0-9]* MB (9 attempts)" "$OUT/c3b.out" && ! grep -q "\[loop" "$OUT/c3b.out" || { echo "    rc=$rc"; tail -4 "$OUT/c3b.out"; false; }'
+fi
+
 echo "== 3. fault injection: planted faults must be found"
 . tools/inject_checks.sh   # the portable checks (fill, page shuffle, coherency, evolve, march, chase, copy, rwstorm, stop-on-error); the same file runs on the Windows runner
 inject_checks_portable "$OUT/cli_inject" "$OUT"

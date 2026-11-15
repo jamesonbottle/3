@@ -20,6 +20,7 @@
 #include "params.h"
 #include "run.h"
 #include "seed.h"
+#include "sizing.h"
 #include "stop_gate.h"
 #include "suite.h"
 #include "types.h"
@@ -1123,6 +1124,137 @@ static void test_lock_slices() {
     }
 }
 
+// Memory sizing and allocation retry (C3, sizing.h): the floor left for the OS, the commit cap, the per-thread split,
+// and the retry sequence when the OS refuses an allocation.
+static void test_sizing() {
+    using namespace sizing;
+    const u64 GB = 1024 * kMB;
+    // automatic size: 90% of the free memory while that leaves more than the floor, otherwise free memory - floor
+    CHECK(auto_bytes(64 * GB) == 64 * GB / 100 * 90, "64 GB free: 90%%");
+    CHECK(auto_bytes(2 * GB) == 2 * GB - kAutoFloor, "2 GB free: floor binds, got %llu MB",
+          (unsigned long long)(auto_bytes(2 * GB) >> 20));
+    CHECK(auto_bytes(kAutoFloor) == 0 && auto_bytes(100 * kMB) == 0 && auto_bytes(0) == 0, "nothing above the floor");
+    // plan(): a request is kept when it fits, capped by the free memory or the commit limit otherwise
+    Plan p = plan(4 * GB, 16 * GB, 0);
+    CHECK(p.bytes == 4 * GB && p.limited == Limit::None, "request that fits is kept");
+    p = plan(16 * GB, 16 * GB, 0);
+    CHECK(p.bytes == 16 * GB / 100 * kCapPercent && p.limited == Limit::Free,
+          "all of the free memory: 97%% cap binds on a big machine, got %llu MB", (unsigned long long)(p.bytes >> 20));
+    p = plan(100 * GB, 8 * GB, 0);
+    CHECK(p.bytes == 8 * GB - kCapFloor && p.limited == Limit::Free, "request above free memory is capped");
+    p = plan(0, 16 * GB, 0);
+    CHECK(p.bytes == auto_bytes(16 * GB) && p.limited == Limit::None, "automatic size is not 'limited'");
+    p = plan(12 * GB, 16 * GB, 6 * GB);
+    CHECK(p.bytes == 6 * GB - kCommitMargin && p.limited == Limit::Commit, "commit limit caps the request: %llu MB",
+          (unsigned long long)(p.bytes >> 20));
+    p = plan(0, 16 * GB, 3 * GB);
+    CHECK(p.bytes == 3 * GB - kCommitMargin && p.limited == Limit::Commit, "commit limit caps the automatic size");
+    p = plan(2 * GB, 16 * GB, 64 * GB);
+    CHECK(p.bytes == 2 * GB && p.limited == Limit::None, "a roomy commit limit changes nothing");
+    p = plan(4 * GB, 0, 0);
+    CHECK(p.bytes == 4 * GB && p.limited == Limit::None, "free memory unknown: the request is used as it is");
+    p = plan(4 * GB, 0, 2 * GB);
+    CHECK(p.bytes == 2 * GB - kCommitMargin && p.limited == Limit::Commit, "free memory unknown, commit known");
+    p = plan(0, 0, 0);
+    CHECK(p.bytes == 0, "no request and nothing known: no size");
+    // the invariant the Windows working-set request relies on: size + 256 MB fits in the free memory
+    for (u64 avail : {300 * kMB, 512 * kMB, GB, 3 * GB, 8 * GB, 64 * GB}) {
+        const u64 a = plan(0, avail, 0).bytes, b = plan(1000 * GB, avail, 0).bytes;
+        CHECK(a + kCapFloor <= avail && b + kCapFloor <= avail, "avail %llu MB: auto %llu MB, capped %llu MB",
+              (unsigned long long)(avail >> 20), (unsigned long long)(a >> 20), (unsigned long long)(b >> 20));
+    }
+    // per-thread split: whole 2 MB pieces, never more than asked
+    CHECK(per_thread(1000 * kMB, 3) == 332 * kMB, "1000 MB over 3 threads: %llu MB",
+          (unsigned long long)(per_thread(1000 * kMB, 3) >> 20));
+    CHECK(per_thread(3 * kMB, 1) == 2 * kMB && per_thread(3 * kMB, 2) == 0 && per_thread(GB, 0) == GB,
+          "small and zero-thread cases");
+    // retry sizes: 90%, 80%, ... 20% of the first size in whole pieces, then none
+    {
+        const u64 first = 500 * kMB;
+        u64 prev = first;
+        int n = 0;
+        for (int step = 1; step <= 12; step++) {
+            const u64 r = retry_per(first, step);
+            if (!r)
+                break;
+            CHECK(r < prev && r % kPiece == 0 && r >= first / 100 * kRetryMinPercent - kPiece,
+                  "step %d: %llu MB after %llu MB", step, (unsigned long long)(r >> 20),
+                  (unsigned long long)(prev >> 20));
+            prev = r;
+            n++;
+        }
+        CHECK(n == 8 && retry_per(first, 9) == 0 && retry_per(first, 0) == 0,
+              "8 retries from 90%% down to 20%%, got %d", n);
+        CHECK(retry_per(first, 1) == 450 * kMB && retry_per(first, 8) == 100 * kMB, "first and last retry size");
+    }
+    // alloc_with_retry with a fake allocator that refuses everything above a limit
+    auto run = [&](u64 perThread, int threads, u64 limit, const std::atomic<bool>* stop, std::vector<u64>& tried,
+                   std::vector<std::pair<u64, u64>>& logged) {
+        return alloc_with_retry(
+            perThread, threads, stop,
+            [&](u64 bytes) -> void* {
+                tried.push_back(bytes);
+                return bytes <= limit ? (void*)0x1000 : nullptr;
+            },
+            [&](u64 failed, u64 next) { logged.push_back({failed, next}); });
+    };
+    std::vector<u64> tried;
+    std::vector<std::pair<u64, u64>> logged;
+    AllocOutcome o = run(500 * kMB, 2, 10000 * kMB, nullptr, tried, logged);
+    CHECK(o.p && o.attempts == 1 && o.per == 500 * kMB && tried.size() == 1 && logged.empty(),
+          "success at the first size: no retry, no log");
+    tried.clear();
+    logged.clear();
+    o = run(500 * kMB, 2, 700 * kMB, nullptr, tried, logged); // 1000, 900, 800 refused; 700 = 350 MB x 2 ... see below
+    // tries (total bytes, 2 threads): 1000, 900, 800 MB refused, 700 MB (= 350 MB per thread) accepted
+    CHECK(o.p && o.attempts == 4 && o.per == 350 * kMB && tried.size() == 4 && tried[0] == 1000 * kMB &&
+              tried[1] == 900 * kMB && tried[2] == 800 * kMB && tried[3] == 700 * kMB,
+          "retry until it fits: %d attempts, per thread %llu MB", o.attempts, (unsigned long long)(o.per >> 20));
+    CHECK(logged.size() == 3 && logged[0].first == 1000 * kMB && logged[0].second == 900 * kMB &&
+              logged[2].first == 800 * kMB && logged[2].second == 700 * kMB,
+          "one log call per retry, with the failed and the next size (%zu calls)", logged.size());
+    tried.clear();
+    logged.clear();
+    o = run(500 * kMB, 2, 100 * kMB, nullptr, tried, logged); // even 20% (200 MB total) is refused
+    CHECK(!o.p && o.attempts == 9 && tried.size() == 9 && tried.back() == 200 * kMB && logged.size() == 8,
+          "gives up after 8 retries at 20%%: %d attempts, last %llu MB", o.attempts,
+          (unsigned long long)(tried.empty() ? 0 : tried.back() >> 20));
+    CHECK(o.per == 100 * kMB, "the outcome reports the last size tried");
+    tried.clear();
+    logged.clear();
+    { // Stop raised during the first refusal: no retry (the user wants out, not a smaller test)
+        std::atomic<bool> stop{false};
+        int calls = 0;
+        o = alloc_with_retry(
+            500 * kMB, 2, &stop,
+            [&](u64) -> void* {
+                calls++;
+                stop = true;
+                return nullptr;
+            },
+            [&](u64, u64) { calls += 100; });
+        CHECK(!o.p && o.attempts == 1 && calls == 1, "stop ends the retrying: %d attempts, calls %d", o.attempts,
+              calls);
+    }
+    { // small sizes: steps that round to the same size are skipped, and the sequence stays strictly decreasing
+        tried.clear();
+        logged.clear();
+        o = run(4 * kMB, 1, 0, nullptr, tried, logged);
+        bool dec = true;
+        for (size_t i = 1; i < tried.size(); i++)
+            dec = dec && tried[i] < tried[i - 1] && tried[i] % kPiece == 0 && tried[i] > 0;
+        CHECK(!o.p && dec && tried.front() == 4 * kMB && tried.back() == 2 * kMB && tried.size() == 2,
+              "4 MB over 1 thread: %zu sizes, last %llu MB", tried.size(),
+              (unsigned long long)(tried.empty() ? 0 : tried.back() >> 20));
+    }
+    { // nothing to allocate: the allocator is not called
+        tried.clear();
+        logged.clear();
+        o = run(0, 2, 10000 * kMB, nullptr, tried, logged);
+        CHECK(!o.p && tried.empty() && logged.empty(), "per = 0: no call");
+    }
+}
+
 // FPU stress kernel (D6). Left alone, x = x * m + k grows by ~1.2e-7 per step and a register reaches +inf after ~8e8
 // steps
 // (~40,100 outer loops), after which it never changes again. The kernel re-seeds the registers every kFpuReseedLoops
@@ -1407,6 +1539,7 @@ int main() {
     test_exceptions();
     test_sync_protocol();
     test_lock_slices();
+    test_sizing();
     test_stop_gate();
     test_keep_awake();
     test_fpu_kernel();

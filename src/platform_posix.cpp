@@ -97,6 +97,9 @@ u64 avail_phys() {
 u64 total_phys() {
     return sysconf_bytes(_SC_PHYS_PAGES);
 }
+u64 avail_commit() {
+    return 0;
+}
 void lower_priority() {}
 KeepAwake keep_awake(bool) {
     return KeepAwake::NotSupported;

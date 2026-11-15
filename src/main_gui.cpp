@@ -20,6 +20,7 @@
 #include "log.h"
 #include "platform.h"
 #include "run.h"
+#include "sizing.h"
 #include "stop_gate.h"
 #include "suite.h"
 #include "types.h"
@@ -191,12 +192,14 @@ void refresh() {
         setText(A.hTest, L"Finished");
 }
 
-// ~90% of free RAM, rounded down so every thread gets the same whole number of 2 MB blocks (no unused remainder)
+// ~90% of free RAM (sizing.h: at least 512 MB stay free, and never more than the system can commit), rounded down so
+// every thread gets the same whole number of 2 MB blocks (no unused remainder)
 u64 auto_mb(int threads) {
     MEMORYSTATUSEX m{};
     m.dwLength = sizeof m;
     GlobalMemoryStatusEx(&m);
-    u64 want = (m.ullAvailPhys >> 20) / 100 * 90, step = (u64)std::max(1, threads) * 2;
+    const u64 want = sizing::plan(0, m.ullAvailPhys, m.ullAvailPageFile).bytes >> 20,
+              step = (u64)std::max(1, threads) * 2;
     return std::max<u64>(want / step * step, 64);
 }
 void apply_auto_mb() {

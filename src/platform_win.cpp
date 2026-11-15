@@ -73,6 +73,12 @@ u64 total_phys() {
     MEMORYSTATUSEX m;
     return mem_status(m) ? m.ullTotalPhys : 0;
 }
+u64 avail_commit() {
+    // ullAvailPageFile: "the maximum amount of memory the current process can commit" (it is called page file, but it
+    // is the commit limit minus what is committed: RAM + page file)
+    MEMORYSTATUSEX m;
+    return mem_status(m) ? m.ullAvailPageFile : 0;
+}
 KeepAwake keep_awake(bool on) {
     // ES_CONTINUOUS keeps the state until it is changed again (or the thread ends); without ES_SYSTEM_REQUIRED the
     // clearing call drops the request. Returns the previous state, or NULL when the call failed.

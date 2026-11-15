@@ -14,6 +14,7 @@
 #include "params.h"
 #include "platform.h"
 #include "seed.h"
+#include "sizing.h"
 
 namespace ddr5 {
 
@@ -283,24 +284,27 @@ struct SuiteDriver {
         R.progress.stopSeconds = s.minutes * 60.0;
     }
 
-    // How much memory to test: the requested size (default 90% of the free memory) capped at 97% of it, split into
-    // whole 2 MB pieces per thread. Says why and returns false when there is no usable answer.
+    // How much memory to test: the requested size (default 90% of the free memory), always leaving a fixed floor for
+    // the OS and capped by the commit limit (sizing.h), split into whole 2 MB pieces per thread. Says why and returns
+    // false when there is no usable answer.
     bool size_region() {
-        const u64 MB2 = 2ull << 20;
         avail = plat::avail_phys();
-        u64 want = s.megabytes ? s.megabytes << 20 : avail / 100 * 90;
+        const u64 requested = s.megabytes ? s.megabytes << 20 : 0;
         if (!avail) { // the OS would not say: unknown is not "no memory free"
-            if (!s.megabytes) {
+            if (!requested) {
                 R.log.emitf("cannot determine the free memory; give the size to test with -mb\n");
                 return false;
             }
             R.log.emitf("cannot determine the free memory; using the requested size without checking it\n");
-        } else if (want > avail / 100 * 97) {
-            want = avail / 100 * 97;
-            R.log.emitf("requested memory exceeds free memory; reduced to %llu MB to avoid paging\n",
-                        (unsigned long long)(want >> 20));
         }
-        per = want / R.layout.T / MB2 * MB2;
+        const sizing::Plan pl = sizing::plan(requested, avail, plat::avail_commit());
+        if (pl.limited == sizing::Limit::Commit)
+            R.log.emitf("%s memory exceeds what the system can commit (RAM + page file); reduced to %llu MB\n",
+                        requested ? "requested" : "free", (unsigned long long)(pl.bytes >> 20));
+        else if (pl.limited == sizing::Limit::Free)
+            R.log.emitf("requested memory exceeds free memory; reduced to %llu MB to avoid paging\n",
+                        (unsigned long long)(pl.bytes >> 20));
+        per = sizing::per_thread(pl.bytes, R.layout.T);
         if (!per) {
             R.log.emitf("not enough memory (need at least 2 MB per thread)\n");
             return false;
@@ -324,12 +328,36 @@ struct SuiteDriver {
                     (unsigned long long)runSeed, s.seedSet ? "given" : "random", (unsigned long long)runSeed);
     }
 
+    // A refused allocation is retried at smaller sizes (sizing.h) and says so, instead of ending the run: the free
+    // memory read at sizing time can be gone by now. `per` and `total` follow the size that finally worked.
     bool allocate() {
         // Stop is passed in so that locking tens of GB can be cut short (platform.h). The region is still returned
         // then: prepare_region() and run_tests() already start nothing once stop is set.
-        R.layout.region = (u8*)plat::alloc(total, cfg.large, gotLP, locked, allocNote, &R.stop);
-        if (!R.layout.region)
-            R.log.emitf("allocation of %llu MB failed\n", (unsigned long long)(total >> 20));
+        const u64 planned = total;
+        const sizing::AllocOutcome o = sizing::alloc_with_retry(
+            per, R.layout.T, &R.stop,
+            [&](u64 bytes) { // a failed attempt must not leave its note or flags to the next one
+                allocNote.clear();
+                gotLP = locked = false;
+                return plat::alloc(bytes, cfg.large, gotLP, locked, allocNote, &R.stop);
+            },
+            [&](u64 failed, u64 next) {
+                R.log.emitf("allocation of %llu MB failed; trying %llu MB\n", (unsigned long long)(failed >> 20),
+                            (unsigned long long)(next >> 20));
+            });
+        R.layout.region = (u8*)o.p;
+        per = o.per;
+        total = per * R.layout.T;
+        if (!R.layout.region) {
+            if (o.attempts > 1)
+                R.log.emitf("allocation failed at every size from %llu MB down to %llu MB (%d attempts)\n",
+                            (unsigned long long)(planned >> 20), (unsigned long long)(total >> 20), o.attempts);
+            else
+                R.log.emitf("allocation of %llu MB failed\n", (unsigned long long)(total >> 20));
+        } else if (o.attempts > 1) {
+            R.log.emitf("testing %.2f GiB instead of the %.2f GiB planned (%d allocation attempts)\n",
+                        total / 1073741824.0, planned / 1073741824.0, o.attempts);
+        }
         stoppedInAlloc = !locked && R.stop.load(std::memory_order_relaxed);
         return R.layout.region != nullptr;
     }
