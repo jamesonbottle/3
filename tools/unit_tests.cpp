@@ -17,6 +17,7 @@
 #include <system_error>
 #include "algo.h"
 #include "cpu_check.h"
+#include "coverage.h"
 #include "cpu_set.h"
 #include "flush.h"
 #include "lineio.h"
@@ -1695,6 +1696,108 @@ static void test_keep_awake() {
 #endif
 }
 
+// CoverageMap (E2a): one bit per whole 4 KiB page, a page is marked only when the range covers all of it.
+static void test_coverage_map() {
+    const u64 P = kPageBytes;
+    { // sizing: the tail that is not a whole page counts neither as a page nor in the total
+        CoverageMap m;
+        m.reset(10 * P + 100);
+        CHECK(m.pages_total() == 10 && m.pages_covered() == 0 && m.percent() == 0.0, "reset: total=%llu covered=%llu",
+              (unsigned long long)m.pages_total(), (unsigned long long)m.pages_covered());
+        m.reset(P - 1);
+        CHECK(m.pages_total() == 0 && m.percent() == 0.0 && m.first_unmarked() == 0, "region below one page");
+        m.mark(0, P); // must not write anywhere
+        CHECK(m.pages_covered() == 0, "mark on an empty map must do nothing");
+        m.reset(0);
+        m.mark(0, 1000 * P);
+        CHECK(m.pages_total() == 0 && m.pages_covered() == 0 && !m.marked(0), "reset(0)");
+    }
+    { // exactly one page, and its neighbours stay clear
+        CoverageMap m;
+        m.reset(10 * P);
+        m.mark(3 * P, P);
+        CHECK(m.pages_covered() == 1 && m.marked(3) && !m.marked(2) && !m.marked(4), "one exact page");
+        CHECK(m.percent() == 10.0, "1 of 10 pages is 10 percent, got %f", m.percent());
+    }
+    { // partial pages at either end are not marked
+        CoverageMap m;
+        m.reset(10 * P);
+        m.mark(P + 1, P); // [4097, 8193): neither page 1 nor page 2 is complete
+        CHECK(m.pages_covered() == 0, "a range inside two pages marks none, got %llu",
+              (unsigned long long)m.pages_covered());
+        m.mark(100, 3 * P); // [100, 12388): pages 1 and 2 are complete, page 0 and 3 are not
+        CHECK(m.pages_covered() == 2 && m.marked(1) && m.marked(2) && !m.marked(0) && !m.marked(3),
+              "unaligned start and end: covered=%llu", (unsigned long long)m.pages_covered());
+        m.mark(5 * P, P - 1); // one byte short of a page
+        CHECK(!m.marked(5), "a page missing its last byte must stay unmarked");
+        m.mark(5 * P + 1, P); // starts one byte late
+        CHECK(!m.marked(5) && !m.marked(6), "a page missing its first byte must stay unmarked");
+    }
+    { // empty, out-of-range and wrapping ranges
+        CoverageMap m;
+        m.reset(10 * P);
+        m.mark(2 * P, 0);
+        m.mark(10 * P, P);
+        m.mark((u64)1 << 40, P);
+        m.mark(~(u64)0 - 5, 100); // offset + bytes wraps around
+        CHECK(m.pages_covered() == 0, "empty / past-the-end ranges must mark nothing, got %llu",
+              (unsigned long long)m.pages_covered());
+        m.mark(8 * P, 100 * P); // reaches past the end: cut there
+        CHECK(m.pages_covered() == 2 && m.marked(8) && m.marked(9), "range past the end is cut at the region end");
+        m.mark(0, ~(u64)0); // the whole address space
+        CHECK(m.pages_covered() == 10 && m.percent() == 100.0 && m.first_unmarked() == 10, "mark everything");
+        m.reset(10 * P);
+        CHECK(m.pages_covered() == 0, "reset must clear every bit");
+    }
+    { // ranges that cross the 64-bit word edge, and the last page of the region
+        CoverageMap m;
+        m.reset(130 * P); // 3 words, the last holds 2 pages
+        m.mark(60 * P, 10 * P);
+        CHECK(m.pages_covered() == 10, "range across a word edge: covered=%llu", (unsigned long long)m.pages_covered());
+        CHECK(!m.marked(59) && m.marked(60) && m.marked(63) && m.marked(64) && m.marked(69) && !m.marked(70),
+              "word-edge range has wrong bits");
+        m.mark(128 * P, 2 * P);
+        CHECK(m.marked(128) && m.marked(129) && m.pages_covered() == 12, "last two pages");
+        m.mark(0, 130 * P);
+        CHECK(m.pages_covered() == 130 && m.percent() == 100.0, "every page of 130 marked once: %llu",
+              (unsigned long long)m.pages_covered());
+        m.mark(0, 130 * P); // again: still 130, never counted twice
+        m.mark(60 * P, 10 * P);
+        CHECK(m.pages_covered() == 130, "re-marking must be idempotent, got %llu",
+              (unsigned long long)m.pages_covered());
+    }
+    { // first_unmarked
+        CoverageMap m;
+        m.reset(200 * P);
+        CHECK(m.first_unmarked() == 0, "empty map: first unmarked is page 0");
+        m.mark(0, 77 * P);
+        m.mark(78 * P, 122 * P);
+        CHECK(m.pages_covered() == 199 && m.first_unmarked() == 77, "hole at page 77, got %llu",
+              (unsigned long long)m.first_unmarked());
+        CHECK(m.first_unmarked(78) == 200 && m.first_unmarked(200) == 200 && m.first_unmarked(500) == 200,
+              "nothing unmarked after the hole");
+        m.mark(77 * P, P);
+        CHECK(m.first_unmarked() == 200 && m.percent() == 100.0, "no hole left");
+    }
+    { // 4 threads marking interleaved single pages and overlapping ranges: the final count is exact
+        CoverageMap m;
+        const u64 n = 4096;
+        m.reset(n * P);
+        std::vector<std::thread> th;
+        for (int t = 0; t < 4; t++)
+            th.emplace_back([&m, t, n] {
+                for (u64 p = (u64)t; p < n; p += 4) {
+                    m.mark(p * P, P);
+                    m.mark(p * P, 3 * P); // overlaps the next pages, which other threads set too
+                }
+            });
+        for (auto& x : th)
+            x.join();
+        CHECK(m.pages_covered() == n && m.percent() == 100.0 && m.first_unmarked() == n,
+              "threads: covered=%llu of %llu", (unsigned long long)m.pages_covered(), (unsigned long long)n);
+    }
+}
+
 int main() {
     test_log.sink = [](const std::string& s) {
         printf("  (engine) %s", s.c_str());
@@ -1721,6 +1824,7 @@ int main() {
     test_stop_gate();
     test_keep_awake();
     test_cpu_set();
+    test_coverage_map();
     test_fpu_kernel();
     test_report();
     test_fill_opts();
