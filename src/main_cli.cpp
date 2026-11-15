@@ -8,6 +8,7 @@
 #include <sstream>
 #include <string>
 #include <vector>
+#include "cpu_check.h"
 #include "log.h"
 #include "params.h"
 #include "platform.h"
@@ -43,6 +44,11 @@ static void usage() {
 }
 
 int main(int argc, char** argv) {
+    // First, before anything else: the rest of the program is compiled for AVX2 and would crash on a CPU without it.
+    if (const Avx2Status avx = avx2_status(); avx != Avx2Status::Ok) {
+        fprintf(stderr, "%s\n", avx2_message(avx));
+        return 2;
+    }
     Settings s;
     s.loops = 1;
     s.stopOnError = false;

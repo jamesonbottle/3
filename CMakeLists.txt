@@ -1,6 +1,7 @@
 # ddr5ramtest - DDR5 memory tester. C++20, AVX2.
 #
-#   ddr5engine          static library: everything under src/ except the two front-ends
+#   ddr5_cpucheck       static library: src/cpu_check.cpp alone, built WITHOUT AVX2 (the run-time AVX2 check; _inject adds a test hook)
+#   ddr5engine          static library: everything under src/ except the two front-ends and cpu_check.cpp
 #   ddr5engine_inject   the same sources built with -DDDR5TEST_INJECT (fault injection for tools/selftest.sh; the algo_*.cpp call DDR5_INJECT hooks, src/inject.cpp is compiled only here)
 #   ddr5test_cli        console front-end (all platforms)
 #   ddr5test_cli_inject console front-end linked against the fault-injection engine (self-test only)
@@ -83,13 +84,34 @@ else()
   list(APPEND ENGINE_SOURCES src/platform_posix.cpp)
 endif()
 
+# The run-time AVX2 check (src/cpu_check.cpp) must run on a CPU that has no AVX2, so it is the one source that is built WITHOUT
+# -mavx2 / /arch:AVX2 (the compiler may use AVX2 in any file that has it enabled, this check included): its own small library
+# instead of ddr5_flags. Built twice like the engine; the _inject copy adds the DDR5TEST_FAKE_AVX2 test hook.
+foreach(lib ddr5_cpucheck ddr5_cpucheck_inject)
+  add_library(${lib} STATIC src/cpu_check.cpp)
+  target_include_directories(${lib} PUBLIC src)
+  if(MSVC)
+    target_compile_options(${lib} PRIVATE /O2 /EHsc /utf-8 /W4)
+    if(DDR5_WARNINGS_AS_ERRORS)
+      target_compile_options(${lib} PRIVATE /WX)
+    endif()
+    target_compile_definitions(${lib} PRIVATE NDEBUG)
+  else()
+    target_compile_options(${lib} PRIVATE -O2 -Wall -Wextra)
+    if(DDR5_SANITIZE)
+      target_compile_options(${lib} PRIVATE -O1 -g -fno-omit-frame-pointer -fsanitize=${DDR5_SANITIZE})
+    endif()
+  endif()
+endforeach()
+target_compile_definitions(ddr5_cpucheck_inject PRIVATE DDR5TEST_INJECT)
+
 add_library(ddr5engine STATIC ${ENGINE_SOURCES})
 target_include_directories(ddr5engine PUBLIC src)
-target_link_libraries(ddr5engine PUBLIC ddr5_flags)
+target_link_libraries(ddr5engine PUBLIC ddr5_flags ddr5_cpucheck)
 
 add_library(ddr5engine_inject STATIC ${ENGINE_SOURCES} src/inject.cpp)
 target_include_directories(ddr5engine_inject PUBLIC src)
-target_link_libraries(ddr5engine_inject PUBLIC ddr5_flags)
+target_link_libraries(ddr5engine_inject PUBLIC ddr5_flags ddr5_cpucheck_inject)
 target_compile_definitions(ddr5engine_inject PRIVATE DDR5TEST_INJECT)
 
 add_executable(ddr5test_cli src/main_cli.cpp)

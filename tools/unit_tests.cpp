@@ -12,6 +12,7 @@
 #include <atomic>
 #include <chrono>
 #include "algo.h"
+#include "cpu_check.h"
 #include "flush.h"
 #include "lineio.h"
 #include "gen.h"
@@ -363,6 +364,31 @@ static void test_suite_keys() {
 // key to an algo that lacks it. Checked over the whole built-in suite for each of the three overriding modes.
 // The flush instruction is chosen once per run: Auto / ClFlushOpt use CLFLUSHOPT exactly when the CPU reports it,
 // ClFlush never does, and --cache bypass style accesses (IO<..., FL=1>) keep the data intact in every mode.
+// The AVX2 gate (E3): the decision from raw CPUID / XGETBV data, and the real reading of this machine.
+static void test_avx2_check() {
+    const unsigned avxBits = (1u << 27) | (1u << 28); // OSXSAVE + AVX in CPUID.1:ECX
+    const unsigned avx2Bit = 1u << 5;                 // CPUID.(7,0):EBX
+    const unsigned long long ymm = 0x7;               // XCR0: x87 + SSE + YMM state
+    using S = Avx2Status;
+    CHECK(avx2_decide(true, avxBits, avx2Bit, ymm) == S::Ok, "a CPU with AVX2 and YMM state enabled must pass");
+    CHECK(avx2_decide(true, avxBits, avx2Bit, 0x3) == S::NoOs, "YMM state off in XCR0 must be NoOs");
+    CHECK(avx2_decide(true, avxBits, avx2Bit, 0x5) == S::NoOs, "SSE state off in XCR0 must be NoOs");
+    CHECK(avx2_decide(true, avxBits, avx2Bit, 0xE7) == S::Ok, "extra XCR0 bits (AVX-512 state) must not matter");
+    CHECK(avx2_decide(true, (1u << 28), avx2Bit, ymm) == S::NoOs, "no OSXSAVE must be NoOs (XGETBV would fault)");
+    CHECK(avx2_decide(true, avxBits, 0, ymm) == S::NoCpu, "no AVX2 bit must be NoCpu");
+    CHECK(avx2_decide(true, (1u << 27), avx2Bit, ymm) == S::NoCpu, "AVX2 bit without the AVX bit must be NoCpu");
+    CHECK(avx2_decide(false, avxBits, avx2Bit, ymm) == S::NoCpu, "no CPUID leaf 7 must be NoCpu, whatever EBX holds");
+    CHECK(avx2_decide(true, 0, 0, 0) == S::NoCpu, "all zero (an old CPU) must be NoCpu");
+    CHECK(avx2_message(S::Ok) == nullptr, "Ok has no message");
+    CHECK(avx2_message(S::NoCpu) && avx2_message(S::NoOs) &&
+              strcmp(avx2_message(S::NoCpu), avx2_message(S::NoOs)) != 0 && strstr(avx2_message(S::NoCpu), "AVX2") &&
+              strstr(avx2_message(S::NoOs), "operating system"),
+          "the two failures need different texts that name the problem");
+    // This test program is itself compiled for AVX2 and has been running AVX2 code since main(), so the machine must
+    // say Ok.
+    CHECK(avx2_status() == S::Ok, "this machine runs AVX2 code, so avx2_status() must be Ok");
+}
+
 static void test_flush_mode() {
     const bool has = cpu_has_clflushopt();
     set_flush_mode(FlushMode::ClFlush);
@@ -1533,6 +1559,7 @@ int main() {
     test_suite_keys();
     test_cache_override();
     test_flush_mode();
+    test_avx2_check();
     test_shared_key_sets();
     test_values();
     test_run_status();

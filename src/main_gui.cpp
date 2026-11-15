@@ -17,6 +17,7 @@
 #include <cstdlib>
 #include <string>
 #include <vector>
+#include "cpu_check.h"
 #include "log.h"
 #include "platform.h"
 #include "run.h"
@@ -602,6 +603,11 @@ void activate_running_copy() {
 } // namespace
 
 int WINAPI WinMain(HINSTANCE inst, HINSTANCE, LPSTR, int show) {
+    // First, before anything else: the rest of the program is compiled for AVX2 and would crash on a CPU without it.
+    if (const Avx2Status avx = avx2_status(); avx != Avx2Status::Ok) {
+        MessageBoxA(nullptr, avx2_message(avx), "DDR5 RAM Test", MB_OK | MB_ICONERROR);
+        return 2;
+    }
     // One copy at a time. The handle is kept until the process ends (the OS releases the mutex then, also after a
     // crash). ERROR_ACCESS_DENIED = the mutex exists but belongs to another security context (for example an elevated
     // copy).

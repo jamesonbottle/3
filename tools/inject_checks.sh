@@ -8,7 +8,8 @@
 # Give OUTDIR as a relative path when the tester is a native Windows program: it does not understand Git Bash's /tmp/... paths.
 # Exits 1 if any check fails, 2 if the tester does not exist. A build WITHOUT the injection hooks fails the first check (exit 0, no errors).
 #
-# Checks that need Linux (SIGINT, SIGABRT exit codes, /dev/full, CPU flags) or env-var hooks stay in tools/selftest.sh.
+# Checks that need Linux (SIGINT, SIGABRT exit codes, /dev/full, CPU flags) or most env-var hooks stay in tools/selftest.sh (the AVX2 gate's
+# hook DDR5TEST_FAKE_AVX2 is here on purpose: it is the only way to see the gate fire on the MSVC build).
 
 # inject_checks_portable INJ OUT: INJ is the fault-injection tester, OUT the directory for its logs and outputs (outputs keep the names
 # inj_<what>.log / .out so the caller can look at them afterwards). Uses the caller's check(), $TMO (seconds) and $RUN (options of one run).
@@ -51,6 +52,16 @@ inject_checks_portable() {
   log="$OUT/inj_stop.log"; rm -f "$log"
   timeout $TMO "$INJ" $RUN -f "Solid and checker" --stop-on-error --log "$log" > "$OUT/inj_stop.out" 2>&1; rc=$?
   check "stop-on-error: exit 1 and no hang (barrier shutdown)" '[ $rc -eq 1 ]'
+  # AVX2 gate (E3): the test hook DDR5TEST_FAKE_AVX2 makes the CPU look like one without AVX2 (cpu) or an OS without YMM state (os).
+  # The tester must say so and exit 2 before it opens a log, allocates or starts any test. The fill check above is the control: the same
+  # binary without the variable runs normally.
+  log="$OUT/inj_avx2.log"; rm -f "$log"
+  DDR5TEST_FAKE_AVX2=cpu timeout $TMO "$INJ" $RUN -f "Solid and checker" --log "$log" > "$OUT/inj_avx2_cpu.out" 2>&1; rc=$?
+  check "AVX2 gate, CPU without AVX2: exit 2, says AVX2 is needed, nothing started (no run header, no log)" '[ $rc -eq 2 ] && grep -q "needs a processor with AVX2" "$OUT/inj_avx2_cpu.out" && ! grep -q "run seed" "$OUT/inj_avx2_cpu.out" && [ ! -e "$log" ] || { echo "    rc=$rc"; head -3 "$OUT/inj_avx2_cpu.out"; false; }'
+  DDR5TEST_FAKE_AVX2=os timeout $TMO "$INJ" $RUN -f "Solid and checker" --log "$log" > "$OUT/inj_avx2_os.out" 2>&1; rc=$?
+  check "AVX2 gate, OS without YMM state: exit 2, names the operating system, nothing started" '[ $rc -eq 2 ] && grep -q "operating system has not enabled the AVX" "$OUT/inj_avx2_os.out" && ! grep -q "run seed" "$OUT/inj_avx2_os.out" && [ ! -e "$log" ] || { echo "    rc=$rc"; head -3 "$OUT/inj_avx2_os.out"; false; }'
+  DDR5TEST_FAKE_AVX2=none timeout $TMO "$INJ" --list > "$OUT/inj_avx2_none.out" 2>&1; rc=$?
+  check "AVX2 gate: an unknown hook value changes nothing (--list works, exit 0)" '[ $rc -eq 0 ] && grep -q "Solid and checker" "$OUT/inj_avx2_none.out"'
 }
 
 # Standalone run (not sourced): set up what selftest.sh would provide.
