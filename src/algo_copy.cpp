@@ -1,5 +1,6 @@
 // algo_copy.cpp - bulk copy engines (memcpy, rep movsb, non-temporal copy).
 #include "algo.h"
+#include "flush.h"
 #include "gen.h"
 #include "inject.h"
 #include "lineio.h"
@@ -23,6 +24,11 @@ const std::set<std::string>& CopyOpts::keys() {
 CopyOpts CopyOpts::from(const Params& P) {
     CopyOpts o;
     o.methods = P.words("method", "memcpy movsb ntcopy");
+    for (const std::string& m : o.methods) { // the run loop treats anything but memcpy / movsb as ntcopy: say so
+        const std::string l = lower(m);
+        if (l != "memcpy" && l != "movsb" && l != "ntcopy")
+            P.note_bad("key 'method': unknown copy method '" + m + "' (use memcpy, movsb or ntcopy)");
+    }
     o.block = std::max<u64>(kLineBytes, P.num("block", 64 * 1024));
     return o;
 }
@@ -69,8 +75,10 @@ void algo_copy(Run& R, const Params& P) {
             }
             R.sync();
             for (u64 o = 0; o < nA && !R.stop; o += bl) {
-                u8* s = A + o * kLineBytes;
-                u8* d = B + o * kLineBytes;
+                u8* const s0 = A + o * kLineBytes;
+                u8* const d0 = B + o * kLineBytes;
+                u8* s = s0;
+                u8* d = d0;
                 size_t nb = bl * kLineBytes;
                 if (j.m == "memcpy")
                     std::memcpy(d, s, nb);
@@ -83,6 +91,13 @@ void algo_copy(Run& R, const Params& P) {
                 } else
                     for (size_t k = 0; k < nb; k += 32)
                         _mm256_stream_si256((__m256i*)(d + k), _mm256_load_si256((const __m256i*)(s + k)));
+                // The copy leaves its source and destination lines in the cache (memcpy / movsb write through it, every
+                // method reads the source through it): flush them so the verify below reads DRAM, not the cache-sized
+                // tail that is still resident (audit G7). The asm of movsb advanced s and d, hence s0 / d0.
+                for (u64 k = 0; k < bl; k++) {
+                    flush_line(s0 + k * kLineBytes);
+                    flush_line(d0 + k * kLineBytes);
+                }
                 R.add_done(bl * kLineBytes * 2);
             }
             _mm_sfence();

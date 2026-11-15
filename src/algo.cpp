@@ -177,6 +177,11 @@ std::vector<std::string> bad_values(const TestDef& t) {
         stride_list(P, true); // from() reads it only when an order needs it; a bad value is wrong either way
     if (mine.count("window_mb"))
         P.num("window_mb", 0);
+    if (mine.count("width") && P.has("width")) { // dispatch() turns any other value into 32
+        const u64 w = P.num("width", 32);
+        if (w != 8 && w != 16 && w != 32)
+            P.note_bad("key 'width': '" + P.str("width") + "' is not a bus width (use 8, 16 or 32)");
+    }
     out.insert(out.end(), P.bad.begin(), P.bad.end());
     return out;
 }

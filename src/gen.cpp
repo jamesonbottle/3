@@ -119,6 +119,9 @@ static void expand_style(const std::string& st, const Params& P, std::vector<std
     } else if (st == "victim") {
         auto vl = P.nums("victims");
         std::vector<u64> victims = vl;
+        for (u64 v : vl)
+            if (v >= 32)
+                P.note_bad("key 'victims': lane " + std::to_string(v) + " does not exist (lanes are 0..31)");
         if (victims.empty())
             for (u64 v = 0; v < 32; v++)
                 victims.push_back(v);
@@ -234,6 +237,10 @@ static std::vector<Var> build_vars_impl(const Params& P, u64 salt, const Logger&
         std::vector<Var> o2;
         for (auto& v : out)
             for (u64 a : al) {
+                if (a >= 64) { // a shift by 64 or more is undefined; the line index has 64 bits
+                    P.note_bad("key 'altshift': " + std::to_string(a) + " is not a bit of the line index (use 0..63)");
+                    continue;
+                }
                 Var m = v;
                 m.g.altshift = (int)a;
                 if (al.size() > 1)

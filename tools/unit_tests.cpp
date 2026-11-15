@@ -930,6 +930,10 @@ static void test_values() {
         {"fill", "pattern", "0xZZ", "key 'pattern': '0xZZ'"},
         {"hammer", "acts", "99999999999999999999", "key 'acts'"},
         {"coherency", "seconds", "3s", "key 'seconds': '3s'"},
+        {"copy", "method", "memcpy movzb", "unknown copy method 'movzb'"},
+        {"fill", "width", "12", "key 'width': '12' is not a bus width"},
+        {"march", "march", "^(w0) >(r0)", "bad march element '>(r0)' (direction must be ^ or u, v or *)"},
+        {"fill", "altshift", "6 64", "key 'altshift': 64 is not a bit of the line index"},
     };
     for (auto& c : cases) {
         std::vector<std::string> r = bad_values(mk(c.algo, c.key, c.val));
@@ -938,6 +942,30 @@ static void test_values() {
             found = found || (m.find(c.expect) != std::string::npos && m.find("test 'bad-demo'") != std::string::npos);
         CHECK(found, "%s %s=%s: bad_values must report '%s' with the test name (got %zu message(s): %s)", c.algo, c.key,
               c.val, c.expect, r.size(), r.empty() ? "" : r[0].c_str());
+    }
+    { // victims: lanes are 0..31, so 32 and above can never match
+        TestDef t = mk("fill", "style", "victim");
+        t.p.m["victims"] = "3 32";
+        bool found = false;
+        for (auto& m : bad_values(t))
+            found = found || m.find("key 'victims': lane 32 does not exist") != std::string::npos;
+        CHECK(found, "victims=32 must be reported");
+    }
+    { // the values just inside the limits stay silent, in any letter case
+        const Case fine[] = {{"copy", "method", "MEMCPY movsb NtCopy", ""},
+                             {"fill", "width", "8", ""},
+                             {"fill", "width", "16", ""},
+                             {"fill", "width", "32", ""},
+                             {"fill", "altshift", "0 63", ""},
+                             {"march", "march", "*(w0) ^(r0,w1) u(r0) v(r1,w0) V(r0) D(5) X(r2)", ""}};
+        for (auto& c : fine) {
+            std::vector<std::string> r = bad_values(mk(c.algo, c.key, c.val));
+            CHECK(r.empty(), "%s %s=%s is valid but bad_values says: %s", c.algo, c.key, c.val,
+                  r.empty() ? "" : r[0].c_str());
+        }
+        TestDef t = mk("fill", "style", "victim");
+        t.p.m["victims"] = "0 31";
+        CHECK(bad_values(t).empty(), "victims 0 and 31 are valid");
     }
 }
 

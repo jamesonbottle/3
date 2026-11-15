@@ -1,4 +1,5 @@
 // algo_march.cpp - user-defined march tests.
+#include <cstring>
 #include "algo.h"
 #include "gen.h"
 #include "inject.h"
@@ -28,6 +29,10 @@ static std::vector<MEl> parse_march(const std::string& s, const Logger& log, con
             continue;
         }
         std::string body = tok.substr(a + 1, b - a - 1);
+        if (!strchr("^uUvV*DdXx", e.dir)) { // up is `^` (`u` also works); anything else used to run as "up" silently
+            log.emitf("%sbad march element '%s' (direction must be ^ or u, v or *)\n", where.c_str(), tok.c_str());
+            continue;
+        }
         if (e.dir == 'D' || e.dir == 'd') {
             e.delay = true;
             if (!pnum_checked(body, e.ms)) {
