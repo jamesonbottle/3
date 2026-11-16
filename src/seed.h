@@ -11,12 +11,14 @@ namespace ddr5 {
 u64 salt_for(u64 runSeed, u64 loop); // differs per loop: a long soak never repeats itself
 u64 fresh_seed();                    // random_device alone can be deterministic on old MinGW, so the clock is mixed in
 
-// Selectable mixer for 'hash' data (GUI: Advanced > RNG). Orders keep splitmix so permutations stay stable.
-// rng: 0 splitmix64, 1 murmur3 fmix64, 2 xorshift64* (Run::rng, copied into Gen::rng by build_vars).
-inline u64 mix64(u64 x, int rng) {
+// Selectable mixer for 'hash' data (CLI --rng, GUI: Advanced > RNG). Orders keep splitmix so permutations stay stable.
+// One enum from the front-end to the mixer (Settings::rngMode -> Run::rng -> Gen::rng via build_vars): Default and
+// SplitMix are the same function, so "default" never changes a seed's data. The values are the CLI/GUI list order.
+enum class Rng : int { Default = 0, SplitMix, Murmur, XorShift };
+inline u64 mix64(u64 x, Rng rng) {
     x += 0x9E3779B97F4A7C15ull;
     switch (rng) {
-    case 1:
+    case Rng::Murmur:
         x ^= x >> 33;
         x *= 0xff51afd7ed558ccdull;
         x ^= x >> 33;
@@ -26,7 +28,7 @@ inline u64 mix64(u64 x, int rng) {
     // xorshift64* needs a real finalizer: its single multiply only moves information UP, so the low output bits ignored
     // most of the input (308 of 4096 input-bit -> output-bit pairs never flipped; tools/unit_tests.cpp measures this).
     // Fold the high half back down, multiply again and fold once more, as splitmix/murmur do.
-    case 2:
+    case Rng::XorShift:
         x ^= x >> 12;
         x ^= x << 25;
         x ^= x >> 27;
@@ -34,6 +36,8 @@ inline u64 mix64(u64 x, int rng) {
         x ^= x >> 29;
         x *= 0xBF58476D1CE4E5B9ull;
         return x ^ (x >> 32);
+    case Rng::Default:
+    case Rng::SplitMix:
     default:
         x = (x ^ (x >> 30)) * 0xBF58476D1CE4E5B9ull;
         x = (x ^ (x >> 27)) * 0x94D049BB133111EBull;

@@ -8,6 +8,8 @@
 #include <sstream>
 #include <string>
 #include <vector>
+#include "build_version.h"
+#include "cpu_check.h"
 #include "log.h"
 #include "params.h"
 #include "platform.h"
@@ -27,14 +29,27 @@ static void usage() {
     puts("ddr5test_cli [-mb MB] [-t threads] [-l loops] [-f name-filter] [--quick] [--coverage PCT] [--minutes N]\n"
          "             [--test-seconds N] [--cache default|bypass|cached|nt] [--rng default|splitmix|murmur|xorshift] "
          "[--fpu]\n"
+         "             [--flush auto|clflush|clflushopt]   (how flushed accesses evict lines; auto = CLFLUSHOPT when "
+         "the CPU "
+         "has it)\n"
          "             [--seed N|0xHEX]   (each run picks a random seed and prints it; pass it back with the same -mb "
          "/ -t to repeat the run)\n"
-         "             [--keep-going | --stop-on-error] [--no-large-pages] [--log FILE] [--list]\n"
-         "exit code: 0 = no errors, 1 = memory errors found, 2 = could not start (bad option / not enough memory), 3 = "
+         "             [--keep-going | --stop-on-error] [--no-large-pages] [--log FILE] [--list] [--version]\n"
+         "             (--log FILE that cannot be opened = exit 2; the default ddr5test.log that cannot be opened only "
+         "warns)\n"
+         "Ctrl-C stops the run after the current step and prints the summary; a second Ctrl-C ends the process at "
+         "once\n"
+         "exit code: 0 = no errors, 1 = memory errors found, 2 = could not start (bad option / log file / not enough "
+         "memory), 3 = "
          "internal error");
 }
 
 int main(int argc, char** argv) {
+    // First, before anything else: the rest of the program is compiled for AVX2 and would crash on a CPU without it.
+    if (const Avx2Status avx = avx2_status(); avx != Avx2Status::Ok) {
+        fprintf(stderr, "%s\n", avx2_message(avx));
+        return 2;
+    }
     Settings s;
     s.loops = 1;
     s.stopOnError = false;
@@ -95,7 +110,7 @@ int main(int argc, char** argv) {
         else if (a == "-f")
             s.filter = nx();
         else if (a == "--quick")
-            s.suite = 1;
+            s.suite = SuiteSet::Quick;
         else if (a == "--coverage")
             s.coverageStop = num(BIG >> 8);
         else if (a == "--minutes") {
@@ -112,11 +127,15 @@ int main(int argc, char** argv) {
         else if (a == "--cache") {
             int k = choice({"default", "bypass", "cached", "nt"});
             if (k >= 0)
-                s.cacheMode = k;
+                s.cacheMode = (CacheMode)k; // same order as the enum
+        } else if (a == "--flush") {
+            int k = choice({"auto", "clflush", "clflushopt"});
+            if (k >= 0)
+                s.flushMode = (FlushMode)k; // same order as the enum
         } else if (a == "--rng") {
             int k = choice({"default", "splitmix", "murmur", "xorshift"});
             if (k >= 0)
-                s.rngMode = k;
+                s.rngMode = (Rng)k; // same order as the enum
         } else if (a ==
                    "--seed") { // any 64-bit value, decimal or 0x hex (the run prints its seed in exactly this form)
             std::string v = nx();
@@ -145,11 +164,15 @@ int main(int argc, char** argv) {
             s.stopOnError = true;
         else if (a == "--no-large-pages")
             s.largePages = false;
-        else if (a == "--log")
+        else if (a == "--log") {
             s.logFile = nx();
-        else if (a == "--list")
+            s.logFileSet = true;
+        } else if (a == "--list")
             list = true;
-        else {
+        else if (a == "--version") {
+            printf("ddr5test_cli %s\n", DDR5_VERSION);
+            return 0;
+        } else {
             usage();
             return a == "-h" || a == "--help" ? 0 : 2;
         }
@@ -160,8 +183,7 @@ int main(int argc, char** argv) {
     if (list) {
         int n = 0;
         for (auto& t : builtin_suite())
-            printf("%3d %s %-9s %s\n", ++n, t.p.flag("quick", false) ? "Q" : " ", t.p.str("algo", "fill").c_str(),
-                   t.name.c_str());
+            printf("%3d %s %-9s %s\n", ++n, t.p.flag("quick", false) ? "Q" : " ", t.algo().c_str(), t.name.c_str());
         return 0;
     }
     log.console = true;

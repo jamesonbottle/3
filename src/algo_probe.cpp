@@ -60,15 +60,15 @@ void algo_probe(Run& R, const Params& P) {
         std::vector<double> all;
         u64 rng = splitmix(0x9876);
         for (size_t si = 0; si < strides.size() && !R.stop; si++) {
-            u64 sl = std::max<u64>(1, strides[si] / 64);
+            u64 sl = std::max<u64>(1, strides[si] / kLineBytes);
             if (sl + 2 >= c.lines)
                 continue;
             R.set_label("probe stride " + std::to_string(strides[si]) + "B");
             for (u64 k = 0; k < opt.samples && !R.stop; k++) {
                 rng = splitmix(rng);
                 u64 bl = rng % (c.lines - sl - 1);
-                const u8* A = c.base + bl * 64;
-                const u8* B = A + sl * 64;
+                const u8* A = c.base + bl * kLineBytes;
+                const u8* B = A + sl * kLineBytes;
                 (void)*(volatile const u64*)A;
                 (void)*(volatile const u64*)B; // prime TLB
                 _mm_clflush(A);

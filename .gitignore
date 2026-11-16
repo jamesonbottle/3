@@ -4,3 +4,4 @@ build/
 *.o
 *.res
 ddr5ramtest.log
+ddr5test.log

@@ -1,29 +1,44 @@
+// clang-format off
 // suite_data.cpp - the built-in DDR5 test suite (28 tests), written as code: there is no config file and no
 // generator. To change a test, edit it here and rebuild; `unit_tests` fails on a misspelled key or a bad name.
 //
 // Every test starts from kDefaults (width, flush) and overrides it with its own keys. Numbers take 0x / K / M / G.
 // Space-separated lists SWEEP: every combination becomes its own run, so one entry covers what used to be many tests.
 //
-//   algo      fill | march | rwstorm | evolve | chase | copy | hammer | probe
+// Keys every test takes
+//   algo      fill | march | rwstorm | evolve | chase | copy | hammer | probe | pagemix | coherency
 //   quick     1 = also part of the "Quick" suite
-//   data      pattern (default) | hash | addr          seeds = N hash/addr seeds
+//   window_mb limits each run to a rolling window (each run uses the next window); not for pagemix / coherency / probe
+//
+// Data keys (fill, march, evolve, rwstorm, copy, hammer)
+//   data      pattern (default) | hash | addr | sat     seeds = N hash/addr seeds
 //   pattern   list; "0xAAAAAAAA:0x55555555" = alternating beats of the 16-beat burst
 //   style     DQ lane styles: sso xtalk half quarter low pulse skew victim walk1 walk0 prbs
-//   order / verify_order   list: seq rev stride random bitrev gray butterfly      stride = byte-stride list
 //   altshift  list: invert data when bit N of the line index is set (checkerboard scale)     modulo = N list
+//   sat       stressapptest-style pattern table; sat_width list (32 64 128 256 = bus-width repeat)
+//
+// Access keys (fill, march, evolve, rwstorm)
+//   order / verify_order   list: seq rev stride random bitrev gray butterfly      stride = byte-stride list
+//   width     bus width of the accesses, 8 | 16 | 32      nt = 1 streaming stores      flush = 1 clflush every access
+//
+// Per algo
+//   fill      both = 1 also run the inverted data     reads = repeated verify passes     cross = 1 verify another
+//             thread's chunk     dwell_ms list: pause between write and verify     disturb list of r | w | rw,
+//             disturb_passes
 //   march     "label=elements | label2=elements2".  ^ up  v down  * any;  w0 w1 write;  r0 r1 verify;  D(ms) pause;
 //             X(r2) / X(w1) / X(rw3) = disturb: N passes of random traffic on ANOTHER window (needs window_mb)
-//   burst     list: lines per op group in a march     dwell_ms   list: pause between write and verify
-//   disturb   list of r | w | rw (fill)     disturb_passes     reads = repeated verify passes     both = 1 also
-//   inverted data width 8|16|32   nt = 1 streaming stores   flush = 1 clflush every access   cross = 1 verify another
-//   thread's chunk window_mb limits each run to a rolling window (each run uses the next window) data = sat:
-//   stressapptest-style pattern table, sat_width list (32 64 128 256 = bus-width repeat) pagemix: seconds coherency:
-//   lines list, inc, seconds   (both use the whole region / first lines, no window) (algo = hammer / probe still exist
-//   in the engine, no built-in test uses them; see git history for the old row-hammer blocks) chase: mlp list rwstorm:
-//   passes   hammer: rowstride aggressors acts rounds   copy: method block evolve: data = hash, seeds, passes, period
-//   every line is rewritten with NEW data every 1..period passes (its own rate); after each pass
-//           all lines are verified against their latest generation, so lost writes and stray changes to untouched lines
-//           both show
+//             burst  list: lines per op group
+//   evolve    data = hash, seeds, passes, period: every line is rewritten with NEW data every 1..period passes (its
+//             own rate); after each pass all lines are verified against their latest generation, so lost writes and
+//             stray changes to untouched lines both show
+//   rwstorm   passes
+//   pagemix   seconds     (uses the whole region, no window)
+//   coherency lines list, inc, seconds     (the first `lines` lines of the region, at most 64, no window)
+//   chase     mlp list, seeds
+//   copy      method, block
+//   hammer    rowstride, aggressors, acts, rounds     (no built-in test uses hammer or probe; see git history for the
+//   probe     samples, stride                          old row-hammer blocks)
+// clang-format on
 
 #include <initializer_list>
 #include <utility>

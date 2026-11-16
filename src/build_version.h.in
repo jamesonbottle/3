@@ -1,0 +1,7 @@
+// Generated into <build>/generated/build_version.h by CMake (src/build_version.h.in is the template). The version is
+// `git describe --tags --always --dirty` of the source tree when CMake was last run (re-run cmake to refresh it), or
+// "unknown" without git; -DDDR5_VERSION=text overrides it. DDR5_BUILD_NUMBER is the commit count, for the numeric
+// FILEVERSION / PRODUCTVERSION of ddr5ramtest.exe (src/app.rc).
+#pragma once
+#define DDR5_VERSION "@DDR5_VERSION@"
+#define DDR5_BUILD_NUMBER @DDR5_BUILD_NUMBER@

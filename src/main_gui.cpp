@@ -17,9 +17,14 @@
 #include <cstdlib>
 #include <string>
 #include <vector>
+#include "build_version.h"
+#include "cpu_check.h"
 #include "log.h"
 #include "platform.h"
 #include "run.h"
+#include "sizing.h"
+#include "start_guard.h"
+#include "stop_gate.h"
 #include "suite.h"
 #include "types.h"
 #include <memory>
@@ -59,6 +64,10 @@ enum Ids {
 const UINT WM_RUN_DONE = WM_APP + 1;
 const UINT_PTR TIMER_ID = 1;
 const wchar_t* const APP_TITLE = L"DDR5 RAM Test";
+const wchar_t* const WND_CLASS = L"Ddr5RamTestWindow";
+// Global\ so that a copy in another user session (fast user switching, RDP) counts too: two memory tests at once would
+// each size themselves from the free memory and fight over it.
+const wchar_t* const ONCE_MUTEX = L"Global\\Ddr5RamTestSingleInstance";
 
 struct App {
     HINSTANCE inst = nullptr;
@@ -77,12 +86,14 @@ struct App {
     double endT = 0;
     u64 lastErr = 0;
     bool stopRequested = false;
+    StopGate gate; // Stop / close rules (stop_gate.h); UI thread only
     bool mbAuto = true,
          setting = true; // mbAuto: Megabytes follows free RAM and thread count until the user types a value
     std::mutex logMu;
     FILE* log = nullptr;
     std::string lastLine;
     int logWhere = 0; // 0 = next to the exe, 1 = %TEMP% (exe folder not writable), 2 = no log file could be opened
+    std::atomic<bool> logFailed{false}; // a write to the log file failed (disk full...): details are missing from it
     std::unordered_map<HWND, std::wstring> shown; // last text per control, to avoid flicker
     u64 totalMB = 0;
 } A;
@@ -140,6 +151,13 @@ void set_running_ui(bool running) {
     EnableWindow(A.hStart, TRUE);
 }
 
+// What the status line says while a stop is under way.
+const wchar_t* stopping_text() {
+    if (A.gate.force_offered())
+        return L"Stuck? Force quit ends the program";
+    return A.gate.closing() ? L"Stopping, then closing..." : L"Stopping...";
+}
+
 void refresh() {
     MEMORYSTATUSEX m{};
     m.dwLength = sizeof m;
@@ -151,6 +169,10 @@ void refresh() {
         return;
     Run& R = *A.run;
     bool busy = A.busy.load();
+    if (busy && A.gate.tick(plat::now())) { // the stop is taking a while: the button becomes the way out
+        setText(A.hStart, L"Force quit");
+        EnableWindow(A.hStart, TRUE);
+    }
     const Run::Status S = R.status();
     double t = S.tStart > 0 ? (busy ? plat::now() : A.endT) - S.tStart : 0;
     if (t < 0)
@@ -158,7 +180,7 @@ void refresh() {
     u64 s = (u64)t;
     setText(A.hDur,
             std::to_wstring(s / 86400) + L":" + two(s / 3600 % 24) + L":" + two(s / 60 % 60) + L":" + two(s % 60));
-    double cov = S.regionBytes ? 100.0 * (double)S.vtotal / (double)S.regionBytes : 0.0;
+    double cov = S.pagesTotal ? 100.0 * (double)S.pagesCovered / (double)S.pagesTotal : 0.0;
     setText(A.hCov, std::to_wstring((u64)cov) + L" %");
     u64 err = S.errors;
     setText(A.hErr, std::to_wstring(err));
@@ -169,18 +191,22 @@ void refresh() {
         InvalidateRect(A.hErr, nullptr, TRUE);
     }
     const std::string& lab = S.label;
-    if (busy)
+    if (busy && A.gate.stopping())
+        setText(A.hTest, stopping_text());
+    else if (busy)
         setText(A.hTest, S.tStart > 0 ? std::wstring(lab.begin(), lab.end()) : L"Allocating memory...");
     else if (!A.stopRequested && err == 0 && S.tStart > 0)
         setText(A.hTest, L"Finished");
 }
 
-// ~90% of free RAM, rounded down so every thread gets the same whole number of 2 MB blocks (no unused remainder)
+// ~90% of free RAM (sizing.h: at least 512 MB stay free, and never more than the system can commit), rounded down so
+// every thread gets the same whole number of 2 MB blocks (no unused remainder)
 u64 auto_mb(int threads) {
     MEMORYSTATUSEX m{};
     m.dwLength = sizeof m;
     GlobalMemoryStatusEx(&m);
-    u64 want = (m.ullAvailPhys >> 20) / 100 * 90, step = (u64)std::max(1, threads) * 2;
+    const u64 want = sizing::plan(0, m.ullAvailPhys, m.ullAvailPageFile).bytes >> 20,
+              step = (u64)std::max(1, threads) * 2;
     return std::max<u64>(want / step * step, 64);
 }
 void apply_auto_mb() {
@@ -202,6 +228,34 @@ u64 read_uint(HWND edit, u64 lo, u64 hi, u64 def) {
     return std::min(std::max(v, lo), hi);
 }
 
+// Text of a std::exception (the system's ANSI code page) as UTF-16 for a message box.
+std::wstring from_ansi(const std::string& s) {
+    if (s.empty())
+        return L"";
+    const int n = MultiByteToWideChar(CP_ACP, 0, s.data(), (int)s.size(), nullptr, 0);
+    if (n <= 0)
+        return std::wstring(s.begin(), s.end());
+    std::wstring w((size_t)n, L'\0');
+    MultiByteToWideChar(CP_ACP, 0, s.data(), (int)s.size(), &w[0], n);
+    return w;
+}
+
+// start_run could not create the Run or its worker thread (F2). The window was never switched to "running", so the
+// only thing left to undo is the log file opened for this attempt; the Start button is still enabled.
+void abort_start(const std::string& why) {
+    {
+        std::lock_guard<std::mutex> l(A.logMu);
+        if (A.log) {
+            fprintf(A.log, "run did not start: %s\n", why.c_str()); // best effort, the header line is already there
+            fclose(A.log);
+            A.log = nullptr;
+        }
+    }
+    setText(A.hTest, L"Could not run");
+    const std::wstring msg = L"The test could not start (" + from_ansi(why) + L").";
+    MessageBoxW(A.wnd, msg.c_str(), APP_TITLE, MB_OK | MB_ICONWARNING);
+}
+
 void start_run() {
     if (A.busy.load())
         return;
@@ -219,9 +273,9 @@ void start_run() {
     A.setting = false;
     SetWindowTextW(A.hThr, std::to_wstring(s.threads).c_str());
     s.stopOnError = SendMessageW(A.hStopErr, BM_GETCHECK, 0, 0) == BST_CHECKED;
-    s.cacheMode = std::max(0, (int)SendMessageW(A.hCache, CB_GETCURSEL, 0, 0));
-    s.rngMode = std::max(0, (int)SendMessageW(A.hRng, CB_GETCURSEL, 0, 0));
-    s.suite = std::max(0, (int)SendMessageW(A.hSet, CB_GETCURSEL, 0, 0));
+    s.cacheMode = (CacheMode)std::max(0, (int)SendMessageW(A.hCache, CB_GETCURSEL, 0, 0)); // list order = enum order
+    s.rngMode = (Rng)std::max(0, (int)SendMessageW(A.hRng, CB_GETCURSEL, 0, 0));
+    s.suite = (SuiteSet)std::max(0, (int)SendMessageW(A.hSet, CB_GETCURSEL, 0, 0));
     s.stressFpu = SendMessageW(A.hFpu, BM_GETCHECK, 0, 0) == BST_CHECKED;
     s.largePages = true;
     s.loops = 0; // runs until stopped
@@ -231,6 +285,7 @@ void start_run() {
         A.log = _wfopen(exe_dir_file(L"ddr5ramtest.log").c_str(), L"a");
         A.lastLine.clear();
         A.logWhere = 0;
+        A.logFailed = false;
         if (!A.log) { // exe folder not writable (e.g. Program Files): fall back to the temp folder rather than losing
                       // the error details
             wchar_t tp[MAX_PATH + 1];
@@ -245,19 +300,20 @@ void start_run() {
         if (A.log) {
             SYSTEMTIME st;
             GetLocalTime(&st);
-            fprintf(A.log,
-                    "---- DDR5 RAM Test run %04d-%02d-%02d %02d:%02d:%02d  %llu MB, %d threads, cache=%d rng=%d set=%d "
-                    "fpu=%d stop-on-error=%d ----\n",
-                    st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond, (unsigned long long)s.megabytes,
-                    s.threads, s.cacheMode, s.rngMode, s.suite, (int)s.stressFpu, (int)s.stopOnError);
+            if (fprintf(A.log,
+                        "---- DDR5 RAM Test run %04d-%02d-%02d %02d:%02d:%02d  %llu MB, %d threads, cache=%d rng=%d "
+                        "set=%d fpu=%d stop-on-error=%d, version %s ----\n",
+                        st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond, (unsigned long long)s.megabytes,
+                        s.threads, (int)s.cacheMode, (int)s.rngMode, (int)s.suite, (int)s.stressFpu, (int)s.stopOnError,
+                        DDR5_VERSION) < 0 ||
+                fflush(A.log) != 0)
+                A.logFailed = true;
         }
     }
     A.logger.sink = [](const std::string& t) {
         std::lock_guard<std::mutex> l(A.logMu);
-        if (A.log) {
-            fputs(t.c_str(), A.log);
-            fflush(A.log);
-        }
+        if (A.log && (fputs(t.c_str(), A.log) == EOF || fflush(A.log) != 0))
+            A.logFailed = true; // shown once, in the end text (on_run_done); the lines still reach the log pane
         size_t e = t.find_last_not_of("\r\n");
         if (e != std::string::npos) {
             size_t b = t.find_last_of('\n', e);
@@ -265,7 +321,29 @@ void start_run() {
             A.lastLine = t.substr(b, e - b + 1);
         }
     };
-    A.run = std::make_unique<Run>(A.logger);
+    // Everything that can throw (the Run's memory, the OS refusing a new thread) happens here, into locals, BEFORE the
+    // window is switched to "running": a failed start then leaves the UI as it was (Start enabled, nothing waiting for
+    // a WM_RUN_DONE that would never come). The worker may already be running when the state below is set; that is
+    // safe because this is the UI thread, so its WM_RUN_DONE is handled only after start_run() has returned.
+    std::unique_ptr<Run> run;
+    std::thread worker;
+    const HWND wnd = A.wnd;
+    std::string why;
+    if (!try_start(
+            [&] {
+                run = std::make_unique<Run>(A.logger);
+                Run* R = run.get();
+                worker = std::thread([s, R, wnd] {
+                    int rc = run_suite(s, *R);
+                    PostMessageW(wnd, WM_RUN_DONE, (WPARAM)rc, 0);
+                });
+            },
+            why)) {
+        abort_start(why);
+        return;
+    }
+    A.run = std::move(run);       // the previous run's worker was joined at the top, nothing uses the old Run any more
+    A.worker = std::move(worker); // not joinable here (joined above), so this assignment cannot terminate
     A.lastErr = 0;
     A.stopRequested = false;
     A.endT = 0;
@@ -275,13 +353,8 @@ void start_run() {
     setText(A.hTest, L"Allocating memory...");
     InvalidateRect(A.hErr, nullptr, TRUE);
     A.busy = true;
+    A.gate.on_run_start();
     set_running_ui(true);
-    Run* R = A.run.get();
-    HWND wnd = A.wnd;
-    A.worker = std::thread([s, R, wnd] {
-        int rc = run_suite(s, *R);
-        PostMessageW(wnd, WM_RUN_DONE, (WPARAM)rc, 0);
-    });
 }
 
 void request_stop() {
@@ -289,12 +362,38 @@ void request_stop() {
         return;
     A.stopRequested = true;
     A.run->stop = true;
-    setText(A.hStart, L"Stopping...");
+    setText(A.hStart, L"Stopping..."); // turns into "Force quit" after a few seconds (StopGate::tick)
     EnableWindow(A.hStart, FALSE);
     setText(A.hTest, L"Stopping...");
 }
 
-void on_run_done(int rc) {
+// The way out of a stop that does not finish (one long OS call, a wedged run): end the process at once, like the CLI's
+// second Ctrl-C. The log lines are flushed as they are written, so only the open file handle is dropped here. The
+// worker may hold the log mutex, so it is only tried; TerminateProcess (not ExitProcess) because the static App would
+// otherwise destroy a joinable std::thread.
+[[noreturn]] void force_exit() {
+    if (A.logMu.try_lock()) {
+        if (A.log) {
+            fclose(A.log);
+            A.log = nullptr;
+        }
+        A.logMu.unlock();
+    }
+    TerminateProcess(GetCurrentProcess(), 1);
+    std::abort();
+}
+
+// Carry out what the StopGate decided.
+void apply_gate(StopGate::Act a) {
+    if (a == StopGate::Act::ForceExit)
+        force_exit();
+    if (a == StopGate::Act::RequestStop)
+        request_stop();
+    else if (a == StopGate::Act::CloseNow)
+        DestroyWindow(A.wnd);
+}
+
+void on_run_done(int rc, bool closing) {
     if (A.worker.joinable())
         A.worker.join();
     A.endT = plat::now();
@@ -311,7 +410,8 @@ void on_run_done(int rc) {
     set_running_ui(false);
     refresh();
     if (A.run && A.run->error_count() > 0)
-        setText(A.hTest, A.stopRequested   ? L"Stopped (errors found)"
+        setText(A.hTest, A.logFailed       ? L"Errors found - the log file could not be written completely (disk full?)"
+                         : A.stopRequested ? L"Stopped (errors found)"
                          : A.logWhere == 0 ? L"Errors found - see ddr5ramtest.log"
                          : A.logWhere == 1 ? L"Errors found - log is in %TEMP%"
                                            : L"Errors found (no log file could be written)");
@@ -319,6 +419,8 @@ void on_run_done(int rc) {
         setText(A.hTest, L"Stopped");
     if (rc >= 2) {
         setText(A.hTest, L"Could not run");
+        if (closing)
+            return; // the user is closing the window: no box in the way
         std::wstring msg(last.begin(), last.end());
         if (msg.empty())
             msg = L"The test could not start.";
@@ -484,14 +586,17 @@ LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         }
         if (LOWORD(wp) == ID_START && HIWORD(wp) == BN_CLICKED) {
             if (A.busy.load())
-                request_stop();
+                apply_gate(A.gate.on_stop_click(plat::now()));
             else
                 start_run();
         }
         return 0;
-    case WM_RUN_DONE:
-        on_run_done((int)wp);
+    case WM_RUN_DONE: { // gate first: refresh() inside on_run_done must not offer "Force quit" for a run that has ended
+        StopGate::Act a = A.gate.on_run_done(); // CloseNow if the window was closed while the run was ending
+        on_run_done((int)wp, a == StopGate::Act::CloseNow);
+        apply_gate(a);
         return 0;
+    }
     case WM_CTLCOLORSTATIC: {
         HDC dc = (HDC)wp;
         SetBkMode(dc, TRANSPARENT);
@@ -501,14 +606,10 @@ LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
             SetTextColor(dc, GetSysColor(COLOR_WINDOWTEXT));
         return (LRESULT)GetSysColorBrush(COLOR_WINDOW);
     }
-    case WM_CLOSE:
-        if (A.busy.load() && A.run) {
-            A.run->stop = true;
-            if (A.worker.joinable())
-                A.worker.join();
-            A.busy = false;
-        }
-        DestroyWindow(h);
+    case WM_CLOSE: // never waits for the worker: the window stays alive until WM_RUN_DONE (or a forced exit)
+        apply_gate(A.gate.on_close(plat::now()));
+        if (A.gate.running())
+            setText(A.hTest, stopping_text());
         return 0;
     case WM_DESTROY:
         KillTimer(h, TIMER_ID);
@@ -525,9 +626,44 @@ LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     return DefWindowProcW(h, msg, wp, lp);
 }
 
+// A copy is already running: bring its window forward (restoring it when minimised). The first copy creates the mutex
+// before its window, so a second one started at the same moment waits a little for the window. If there is no window on
+// this desktop (the other copy runs in another session, or as another user), say so instead.
+void activate_running_copy() {
+    HWND w = nullptr;
+    for (int i = 0; i < 20 && !w; i++) {
+        w = FindWindowW(WND_CLASS, nullptr);
+        if (!w)
+            Sleep(100);
+    }
+    if (!w) {
+        MessageBoxW(nullptr, L"DDR5 RAM Test is already running (in another user session, or as another user).",
+                    APP_TITLE, MB_OK | MB_ICONINFORMATION);
+        return;
+    }
+    if (IsIconic(w))
+        ShowWindow(w, SW_RESTORE);
+    SetForegroundWindow(w); // Windows may only flash the taskbar button when another program holds the foreground
+}
+
 } // namespace
 
 int WINAPI WinMain(HINSTANCE inst, HINSTANCE, LPSTR, int show) {
+    // First, before anything else: the rest of the program is compiled for AVX2 and would crash on a CPU without it.
+    if (const Avx2Status avx = avx2_status(); avx != Avx2Status::Ok) {
+        MessageBoxA(nullptr, avx2_message(avx), "DDR5 RAM Test", MB_OK | MB_ICONERROR);
+        return 2;
+    }
+    // One copy at a time. The handle is kept until the process ends (the OS releases the mutex then, also after a
+    // crash). ERROR_ACCESS_DENIED = the mutex exists but belongs to another security context (for example an elevated
+    // copy).
+    SetLastError(0);
+    HANDLE once = CreateMutexW(nullptr, FALSE, ONCE_MUTEX);
+    const DWORD onceErr = GetLastError();
+    if (onceErr == ERROR_ALREADY_EXISTS || (!once && onceErr == ERROR_ACCESS_DENIED)) {
+        activate_running_copy();
+        return 0;
+    }
     A.inst = inst;
     INITCOMMONCONTROLSEX icc{sizeof icc, ICC_TAB_CLASSES | ICC_UPDOWN_CLASS | ICC_STANDARD_CLASSES};
     InitCommonControlsEx(&icc);
@@ -543,7 +679,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE, LPSTR, int show) {
     wc.hInstance = inst;
     wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
     wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
-    wc.lpszClassName = L"Ddr5RamTestWindow";
+    wc.lpszClassName = WND_CLASS;
     wc.hIcon = LoadIcon(nullptr, IDI_APPLICATION);
     wc.hIconSm = wc.hIcon;
     RegisterClassExW(&wc);

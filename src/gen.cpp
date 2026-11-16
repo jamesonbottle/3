@@ -1,5 +1,7 @@
 // gen.cpp - sat_table, expand_style, build_vars.
 #include "gen.h"
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <utility>
 #include "log.h"
@@ -53,6 +55,12 @@ const std::vector<SatPat>& sat_table() {
         add("8b10b-checker", {0xB5B5B5B5u, 0x4A4A4A4Au}, 1, 0, 0, 1);
         add("5557", {0x55555557u, 0x55575555u}, 0, 2, 0, 0);
         add("0002/FFFD", {0x00020002u, 0xFFFDFFFDu}, 0, 2, 0, 0);
+        for (const SatPat& p : v) // sat_word wraps its index with `& (len - 1)`
+            if (p.len < 1 || p.len > 64 || (p.len & (p.len - 1))) {
+                fprintf(stderr, "internal error: pattern '%s' has length %d, which is not a power of two\n", p.name,
+                        p.len);
+                abort();
+            }
         return v;
     }();
     return t;
@@ -111,6 +119,9 @@ static void expand_style(const std::string& st, const Params& P, std::vector<std
     } else if (st == "victim") {
         auto vl = P.nums("victims");
         std::vector<u64> victims = vl;
+        for (u64 v : vl)
+            if (v >= 32)
+                P.note_bad("key 'victims': lane " + std::to_string(v) + " does not exist (lanes are 0..31)");
         if (victims.empty())
             for (u64 v = 0; v < 32; v++)
                 victims.push_back(v);
@@ -206,7 +217,7 @@ static std::vector<Var> build_vars_impl(const Params& P, u64 salt, const Logger&
             for (size_t i = 0; i <= tok.size(); i++) {
                 if (i == tok.size() || tok[i] == ':') {
                     if (!c.empty())
-                        vals.push_back((u32)pnum(c));
+                        vals.push_back((u32)P.parse_num("pattern", c));
                     c.clear();
                 } else
                     c += tok[i];
@@ -226,6 +237,10 @@ static std::vector<Var> build_vars_impl(const Params& P, u64 salt, const Logger&
         std::vector<Var> o2;
         for (auto& v : out)
             for (u64 a : al) {
+                if (a >= 64) { // a shift by 64 or more is undefined; the line index has 64 bits
+                    P.note_bad("key 'altshift': " + std::to_string(a) + " is not a bit of the line index (use 0..63)");
+                    continue;
+                }
                 Var m = v;
                 m.g.altshift = (int)a;
                 if (al.size() > 1)
@@ -252,7 +267,7 @@ static std::vector<Var> build_vars_impl(const Params& P, u64 salt, const Logger&
     return out;
 }
 
-std::vector<Var> build_vars(const Params& P, u64 salt, int rng, const Logger& log) {
+std::vector<Var> build_vars(const Params& P, u64 salt, Rng rng, const Logger& log) {
     std::vector<Var> out = build_vars_impl(P, salt, log);
     for (auto& v : out)
         v.g.rng = rng;

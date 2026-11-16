@@ -1,2 +1,33 @@
-// Embeds the manifest (visual styles / DPI awareness). Resource type 24 = RT_MANIFEST, id 1 = executable manifest.
+// Embeds the manifest (visual styles / DPI awareness) and the version resource.
+#include <winver.h>
+#include "build_version.h"
+
+// Resource type 24 = RT_MANIFEST, id 1 = executable manifest.
 1 24 "app.manifest"
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION 0,0,0,DDR5_BUILD_NUMBER
+ PRODUCTVERSION 0,0,0,DDR5_BUILD_NUMBER
+ FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
+ FILEFLAGS 0
+ FILEOS VOS_NT_WINDOWS32
+ FILETYPE VFT_APP
+ FILESUBTYPE VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "FileDescription", "DDR5 RAM Test"
+            VALUE "FileVersion", DDR5_VERSION "\0"
+            VALUE "InternalName", "ddr5ramtest"
+            VALUE "OriginalFilename", "ddr5ramtest.exe"
+            VALUE "ProductName", "DDR5 RAM Test"
+            VALUE "ProductVersion", DDR5_VERSION "\0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0409, 1200
+    END
+END
