@@ -434,7 +434,7 @@ struct SuiteDriver {
         algos().at(t.algo())(R, t.p);
         double el = plat::now() - ts;
         u64 bad = R.st.lines.load();
-        R.log.emitf("    %s  %.1fs  %.1f GB/s avg   coverage this test %.1fx\n",
+        R.log.emitf("    %s  %.1fs  %.1f GB/s avg   verified passes this test %.1fx\n",
                     bad ? "FAIL" : (R.stop ? "STOP" : "pass"), el, R.progress.done.load() / 1e9 / std::max(el, 1e-9),
                     (double)R.progress.vbytes.load() / (double)total);
         return bad;
@@ -467,8 +467,9 @@ struct SuiteDriver {
         R.log.emitf("\nfinished in %.0fs: %s (%llu bad lines, %d failing test runs)%s%s\n", el,
                     R.total.lines ? "ERRORS FOUND" : "no errors", (unsigned long long)R.total.lines.load(), failedTests,
                     R.progress.stopReason.empty() ? "" : "  - ", R.progress.stopReason.c_str());
-        R.log.emitf("total coverage: %.1fx of the %.2f GiB tested region verified\n",
-                    (double)R.progress.vtotal.load() / (double)total, total / 1073741824.0);
+        R.log.emitf("total coverage: %.1f%% of the %llu pages (4 KiB) of the %.2f GiB tested region verified\n",
+                    R.cover.percent(), (unsigned long long)R.cover.pages_total(), total / 1073741824.0);
+        R.log.emitf("total verified passes: %.1fx\n", (double)R.progress.vtotal.load() / (double)total);
         if (R.errors.logFailed)
             R.log.emitf("WARNING: writing to the log file '%s' failed (see above): its error details are incomplete\n",
                         cfg.logFile.c_str());

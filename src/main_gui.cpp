@@ -180,7 +180,7 @@ void refresh() {
     u64 s = (u64)t;
     setText(A.hDur,
             std::to_wstring(s / 86400) + L":" + two(s / 3600 % 24) + L":" + two(s / 60 % 60) + L":" + two(s % 60));
-    double cov = S.regionBytes ? 100.0 * (double)S.vtotal / (double)S.regionBytes : 0.0;
+    double cov = S.pagesTotal ? 100.0 * (double)S.pagesCovered / (double)S.pagesTotal : 0.0;
     setText(A.hCov, std::to_wstring((u64)cov) + L" %");
     u64 err = S.errors;
     setText(A.hErr, std::to_wstring(err));

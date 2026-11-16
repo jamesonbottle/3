@@ -100,11 +100,13 @@ struct Layout {
 // How far the run has got: the byte counters the workers bump, the clocks, and the user's stop criteria.
 struct Progress {
     std::atomic<u64> done{0}; // bytes moved in the current test (drives the GB/s figure)
-    // coverage (HCI/Karhu-style: how many times the tested region has been verified): this test / the whole run
+    // passes (HCI/Karhu-style: how many times the tested region has been verified, in bytes): this test / the whole
+    // run. This is a throughput-like figure; the coverage that --coverage stops on is Run::cover (pages, real
+    // addresses).
     std::atomic<u64> vbytes{0}, vtotal{0};
     std::atomic<double> tStart{0}; // plat::now() at the start of the run; set once by run_suite, read by Run::status()
     double tTestStart = 0;         // plat::now() at the start of the current test
-    u64 stopCoverage = 0;          // stop once vtotal reaches this many percent of the region (0 = off)
+    u64 stopCoverage = 0;          // stop once Run::cover has this many percent of the pages (0 = off)
     double stopSeconds = 0;        // stop after this many seconds (0 = off)
     std::string stopReason;
 };
@@ -256,18 +258,26 @@ struct Run {
 
     // ---- front-end: follow a run from another thread
     struct Status {
-        double tStart;     // plat::now() when the run started; 0 while the memory is still being allocated
-        u64 regionBytes;   // size of the tested region; 0 before it is allocated
-        u64 vtotal;        // bytes verified so far in the whole run (coverage = vtotal / regionBytes)
-        u64 errors;        // bad lines so far
+        double tStart;   // plat::now() when the run started; 0 while the memory is still being allocated
+        u64 regionBytes; // size of the tested region; 0 before it is allocated
+        u64 vtotal; // bytes verified so far in the whole run: a "passes" figure (vtotal / regionBytes), NOT coverage
+        u64 pagesCovered; // 4 KiB pages of the region a finished verify has covered (the coverage; 0 before allocation)
+        u64 pagesTotal;   // whole pages in the region; 0 before it is allocated
+        u64 errors;       // bad lines so far
         std::string label; // the running test
     };
     Status status() const {
         Status s{progress.tStart.load(std::memory_order_acquire),
                  layout.regionBytes.load(std::memory_order_acquire),
                  progress.vtotal.load(),
+                 0,
+                 0,
                  errors.errTotal.load(),
                  {}};
+        if (s.regionBytes) { // prepare_region resets `cover` BEFORE it publishes regionBytes: read it only after that
+            s.pagesCovered = cover.pages_covered();
+            s.pagesTotal = cover.pages_total();
+        }
         std::lock_guard<std::mutex> l(errors.mu);
         s.label = label;
         return s;
@@ -362,8 +372,12 @@ void Run::parallel(F fn) {
             std::this_thread::sleep_for(std::chrono::milliseconds(250));
             double t = plat::now();
             if (!stop.load() && layout.regionBytes) { // user-set stop criteria: coverage target or time limit
-                if (progress.stopCoverage &&
-                    progress.vtotal.load() * 100 >= progress.stopCoverage * layout.regionBytes) {
+                // coverage = pages of the region that a finished verify has covered (coverage.h), not bytes verified.
+                // Integer compare (covered * 100 >= target * total) so 100 means every page, with no rounding. A region
+                // with no whole page (total 0) can never reach the target.
+                const u64 pgTotal = cover.pages_total();
+                if (progress.stopCoverage && pgTotal &&
+                    cover.pages_covered() * 100 >= progress.stopCoverage * pgTotal) {
                     progress.stopReason = "coverage target reached";
                     stop = true;
                 } else if (progress.stopSeconds > 0 && progress.tStart > 0 &&
@@ -384,8 +398,7 @@ void Run::parallel(F fn) {
                 }
                 char buf[220];
                 snprintf(buf, sizeof buf, "  [%5.0fs] %-50.50s %5.1f GB/s  cov %4.0f%%  errors: %llu (this test %llu)",
-                         t - t0, lab.c_str(), rate,
-                         layout.regionBytes ? 100.0 * progress.vtotal.load() / layout.regionBytes : 0.0,
+                         t - t0, lab.c_str(), rate, layout.regionBytes ? cover.percent() : 0.0,
                          (unsigned long long)errors.errTotal.load(), // run total: st is reset for every test
                          (unsigned long long)st.lines.load());
                 if (log.console && log.tty) {
