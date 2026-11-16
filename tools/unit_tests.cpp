@@ -1798,6 +1798,23 @@ static void test_coverage_map() {
     }
 }
 
+// for_pages_except: the maximal runs of pages that avoid the skipped ones.
+static void test_pages_except() {
+    auto runs = [](std::vector<u64> skip, u64 pages) {
+        std::vector<std::pair<u64, u64>> r;
+        for_pages_except(std::move(skip), pages, [&](u64 pg, u64 n) { r.push_back({pg, n}); });
+        return r;
+    };
+    using V = std::vector<std::pair<u64, u64>>;
+    CHECK(runs({}, 10) == V({{0, 10}}), "no skipped page: one run");
+    CHECK(runs({}, 0).empty(), "no pages: no run");
+    CHECK(runs({3}, 10) == V({{0, 3}, {4, 6}}), "one skipped page in the middle");
+    CHECK(runs({0}, 4) == V({{1, 3}}) && runs({3}, 4) == V({{0, 3}}), "skipped page at either end");
+    CHECK(runs({7, 2, 2, 5}, 10) == V({{0, 2}, {3, 2}, {6, 1}, {8, 2}}), "unsorted, duplicated skips");
+    CHECK(runs({0, 1, 2, 3}, 4).empty(), "every page skipped: no run");
+    CHECK(runs({99, 5}, 8) == V({{0, 5}, {6, 2}}), "a page number past the end is ignored");
+}
+
 // E2b: the algos mark the pages they really verified in Run::cover. A clean run of each algo alone covers every page of
 // the region; a run stopped in the middle of its first verify covers fewer (a stopped job marks nothing).
 static void test_coverage_hooks() {
@@ -1848,6 +1865,93 @@ static void test_coverage_hooks() {
               "%s: a run stopped in its first verify must not cover every page, got %llu of %llu", a.name,
               (unsigned long long)s.covered, (unsigned long long)s.total);
     }
+    // Algos that are called directly on a hand-made region, so a test can set keys the suite does not (chase with 12
+    // chains leaves w.n % 12 lines of the order unvisited; hammer is not in the built-in suite).
+    // stopMode: 0 = run to the end, 1 = stop already set at the start, 2 = stop in the middle of the first verify
+    auto direct = [](void (*algo)(Run&, const Params&), std::map<std::string, std::string> keys, int stopMode,
+                     u64 mb = 8) {
+        Logger lg;
+        lg.sink = [](const std::string&) {
+        };
+        Run R(lg);
+        const int T = 2;
+        const u64 total = mb << 20, per = total / T;
+        bool got = false, locked = false;
+        std::string note;
+        u8* mem = (u8*)plat::alloc(total, false, got, locked, note);
+        Out o{0, 0, -1};
+        if (!mem) {
+            CHECK(false, "could not allocate the test region");
+            return o;
+        }
+        std::memset(mem, 0, total);
+        R.layout.T = T;
+        R.layout.region = mem;
+        for (int t = 0; t < T; t++)
+            R.layout.chunks.push_back({mem + (u64)t * per, per / kLineBytes, (u64)t * (per / kLineBytes)});
+        R.cover.reset(total);
+        R.layout.regionBytes.store(total, std::memory_order_release);
+        R.testName = "direct";
+        Params P;
+        P.m = std::move(keys);
+        if (stopMode == 1)
+            R.stop = true; // before the start: nothing may be marked
+        std::atomic<bool> fin{false};
+        std::thread watcher;
+        if (stopMode == 2)
+            watcher = std::thread([&] {
+                while (!fin && R.status().vtotal == 0)
+                    std::this_thread::sleep_for(std::chrono::microseconds(50));
+                R.stop = true;
+            });
+        algo(R, P);
+        fin = true;
+        if (watcher.joinable())
+            watcher.join();
+        o = Out{R.cover.pages_covered(), R.cover.pages_total(), 0};
+        plat::release(mem, total);
+        return o;
+    };
+    {
+        // 65536 lines per chunk are not a multiple of 12: 4 lines per chunk (random places in it) are never loaded, so
+        // with ONE chain layout their pages stay unmarked: 8 pages at most, 2 at least (some may share a page)
+        Out c = direct(algo_chase, {{"mlp", "12"}, {"seeds", "1"}}, 0);
+        CHECK(c.total == 2048 && c.covered < c.total && c.covered >= c.total - 8,
+              "chase mlp=12: pages holding an unvisited line must stay unmarked, got %llu of %llu",
+              (unsigned long long)c.covered, (unsigned long long)c.total);
+        Out k = direct(algo_chase, {{"mlp", "8"}, {"seeds", "1"}}, 0);
+        CHECK(k.covered == k.total, "chase mlp=8 visits every line, got %llu of %llu", (unsigned long long)k.covered,
+              (unsigned long long)k.total);
+        Out z = direct(algo_chase, {{"mlp", "12"}}, 1);
+        CHECK(z.covered == 0, "chase with stop set marked %llu pages", (unsigned long long)z.covered);
+        Out m = direct(algo_chase, {{"mlp", "12"}, {"seeds", "1"}}, 2, 256);
+        CHECK(m.total == 65536 && m.covered < m.total / 2, "chase stopped mid-chain marked %llu of %llu pages",
+              (unsigned long long)m.covered, (unsigned long long)m.total);
+    }
+    {
+        Out c = direct(algo_hammer, {{"rounds", "1"}, {"acts", "1000"}}, 0);
+        CHECK(c.total == 2048 && c.covered == c.total,
+              "hammer: the victim check must cover every page, got %llu of %llu", (unsigned long long)c.covered,
+              (unsigned long long)c.total);
+        Out z = direct(algo_hammer, {{"rounds", "1"}, {"acts", "1000"}}, 1);
+        CHECK(z.covered == 0, "hammer with stop set marked %llu pages", (unsigned long long)z.covered);
+        Out m = direct(algo_hammer, {{"rounds", "1"}, {"acts", "1000"}}, 2, 256);
+        CHECK(m.total == 65536 && m.covered < m.total / 2, "hammer stopped mid-verify marked %llu of %llu pages",
+              (unsigned long long)m.covered, (unsigned long long)m.total);
+    }
+    { // pagemix with no copy / invert / refill phase (seconds=0, at most 63 operations): the final verify marks the
+      // rest
+        Out c = direct(algo_pagemix, {{"seconds", "0"}}, 0);
+        CHECK(c.total == 2048 && c.covered == c.total, "pagemix final verify must cover every page, got %llu of %llu",
+              (unsigned long long)c.covered, (unsigned long long)c.total);
+        Out m = direct(algo_pagemix, {{"seconds", "0"}}, 2, 256);
+        CHECK(m.total == 65536 && m.covered < m.total / 2, "pagemix stopped mid-final-verify marked %llu of %llu pages",
+              (unsigned long long)m.covered, (unsigned long long)m.total);
+    }
+    { // coherency and probe compare no data pages: they must mark nothing
+        Out c = direct(algo_coherency, {{"seconds", "1"}}, 0);
+        CHECK(c.covered == 0, "coherency marked %llu pages", (unsigned long long)c.covered);
+    }
 }
 
 int main() {
@@ -1877,6 +1981,7 @@ int main() {
     test_keep_awake();
     test_cpu_set();
     test_coverage_map();
+    test_pages_except();
     test_coverage_hooks();
     test_fpu_kernel();
     test_report();

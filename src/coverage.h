@@ -11,8 +11,10 @@
 // Threading: reset() runs before the workers exist (it is not thread-safe). mark() and the readers may run on any
 // thread at any time; they use relaxed atomics, so a reader sees a bit some time after it was set, never a wrong one.
 // This file is pure logic: no algorithm, no run state.
+#include <algorithm>
 #include <atomic>
 #include <memory>
+#include <vector>
 #include "types.h"
 
 namespace ddr5 {
@@ -83,5 +85,23 @@ class CoverageMap {
     u64 nwords_ = 0; // 64-bit words holding the bits
     std::unique_ptr<std::atomic<u64>[]> words_;
 };
+
+// Calls mark(firstPage, pageCount) for every maximal run of pages in [0, pages) that is not in `skip` (page numbers in
+// any order, duplicates and numbers >= pages are fine). For a verify that compared every line of a window except a few
+// known ones: the pages holding such a line must not count as verified.
+template <class F>
+inline void for_pages_except(std::vector<u64> skip, u64 pages, F&& mark) {
+    std::sort(skip.begin(), skip.end());
+    u64 from = 0;
+    for (u64 pg : skip) {
+        if (pg >= pages)
+            break;
+        if (pg > from)
+            mark(from, pg - from);
+        from = pg + 1;
+    }
+    if (pages > from)
+        mark(from, pages - from);
+}
 
 } // namespace ddr5

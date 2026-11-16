@@ -47,6 +47,7 @@ static void pm_check(Run& R, int tid, u8* p, const Gen& g, bool inv, const char*
             io::store(p + l * kLineBytes, e);
         }
     }
+    R.mark_verified(p, kLinesPerPage); // all 64 lines were compared (this loop has no early exit)
 }
 template <int FL>
 static void pm_copy(Run& R, int tid, u8* s, u8* d, const Gen& g, bool inv) {
@@ -62,6 +63,7 @@ static void pm_copy(Run& R, int tid, u8* s, u8* d, const Gen& g, bool inv) {
         io::store(d + l * kLineBytes,
                   e); // what was read equals e when the check passes; after a failure the destination gets good data
     }
+    R.mark_verified(s, kLinesPerPage); // the source page was compared in full; the destination was only written
 }
 template <int FL>
 static void pm_invert(u8* p) {

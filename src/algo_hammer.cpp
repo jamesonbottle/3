@@ -111,6 +111,8 @@ void algo_hammer(Run& R, const Params& P) {
                 if (((i + 1) & 0xFFFF) == 0)
                     R.tick();
             }
+            if (!R.stop)
+                R.mark_verified(w.base, w.n); // the victim check compared every line of the window
             R.sync();
         }
     });

@@ -107,6 +107,17 @@ void algo_chase(Run& R, const Params& P) {
                         R.add_done(kTickLines * kLineBytes * K);
                     }
                 }
+                // The chains load positions 0 .. K*steps-1 of the order. The last w.n % K positions are never loaded
+                // (none when K is a power of two, as in the built-in test): a page holding one of them is not fully
+                // verified.
+                if (steps && !R.stop) {
+                    std::vector<u64> skip;
+                    for (u64 q = K * steps; q < w.n; q++)
+                        skip.push_back(o.at(q) / kLinesPerPage);
+                    for_pages_except(std::move(skip), w.n / kLinesPerPage, [&](u64 pg, u64 n) {
+                        R.mark_verified(w.base + pg * kPageBytes, n * kLinesPerPage);
+                    });
+                }
                 R.sync();
             }
     });
