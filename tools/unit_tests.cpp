@@ -1798,6 +1798,58 @@ static void test_coverage_map() {
     }
 }
 
+// E2b: the algos mark the pages they really verified in Run::cover. A clean run of each algo alone covers every page of
+// the region; a run stopped in the middle of its first verify covers fewer (a stopped job marks nothing).
+static void test_coverage_hooks() {
+    struct Out {
+        u64 covered, total;
+        int rc;
+    };
+    auto go = [](const char* filter, u64 mb, bool stopInVerify) {
+        Settings st;
+        st.megabytes = mb;
+        st.threads = 2;
+        st.largePages = false;
+        st.filter = filter;
+        st.loops = 1;
+        st.testSeconds = 1;
+        st.seedSet = true;
+        st.seed = 7;
+        Logger lg;
+        lg.sink = [](const std::string&) {
+        };
+        Run R(lg);
+        std::atomic<bool> done{false};
+        std::thread watcher;
+        if (stopInVerify) // vtotal moves for the first time after a thread has verified 64K lines: that is mid-verify
+            watcher = std::thread([&] {
+                while (!done && R.status().vtotal == 0)
+                    std::this_thread::sleep_for(std::chrono::microseconds(50));
+                R.stop = true;
+            });
+        int rc = run_suite(st, R);
+        done = true;
+        if (watcher.joinable())
+            watcher.join();
+        return Out{R.cover.pages_covered(), R.cover.pages_total(), rc};
+    };
+    const struct {
+        const char* name;
+        const char* filter;
+    } algos[] = {{"fill", "solid and checker"}, {"fill cross", "cross-core verify"}, {"march", "address-in-address"},
+                 {"evolve", "evolving data"},   {"rwstorm", "storm, hash data"},     {"copy", "bulk copy"}};
+    for (const auto& a : algos) {
+        Out c = go(a.filter, 8, false);
+        CHECK(c.rc == 0 && c.total == (8ull << 20) / kPageBytes && c.covered == c.total,
+              "%s: a clean run must cover every page, got %llu of %llu (rc %d)", a.name, (unsigned long long)c.covered,
+              (unsigned long long)c.total, c.rc);
+        Out s = go(a.filter, 256, true);
+        CHECK(s.total == (256ull << 20) / kPageBytes && s.covered < s.total,
+              "%s: a run stopped in its first verify must not cover every page, got %llu of %llu", a.name,
+              (unsigned long long)s.covered, (unsigned long long)s.total);
+    }
+}
+
 int main() {
     test_log.sink = [](const std::string& s) {
         printf("  (engine) %s", s.c_str());
@@ -1825,6 +1877,7 @@ int main() {
     test_keep_awake();
     test_cpu_set();
     test_coverage_map();
+    test_coverage_hooks();
     test_fpu_kernel();
     test_report();
     test_fill_opts();

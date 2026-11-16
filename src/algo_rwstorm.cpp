@@ -92,13 +92,18 @@ void algo_rwstorm(Run& R, const Params& P) {
                 for (u64 p = 0; p < opt.passes && !R.stop; p++) {
                     if (writer)
                         walk(R, ow, wo.rev, wr); // rewrite same data
-                    else
+                    else {
                         walk(R, ov, vo.rev, rd(pv)); // concurrently verify partner's chunk
+                        if (!R.stop)
+                            R.mark_verified(pv.base, pv.n);
+                    }
                 }
                 _mm_sfence();
                 R.sync();
                 DDR5_INJECT(rwstorm_before_final, tid, ji, w);
                 walk(R, of, false, rd(w)); // final check of own chunk
+                if (!R.stop)
+                    R.mark_verified(w.base, w.n);
             });
             R.sync();
         }

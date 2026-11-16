@@ -103,7 +103,7 @@ void algo_copy(Run& R, const Params& P) {
             _mm_sfence();
             R.sync();
             DDR5_INJECT(copy_after_copy, tid, ji, A, B, nA);
-            for (int side = 0; side < 2 && !R.stop; side++)
+            for (int side = 0; side < 2 && !R.stop; side++) {
                 for (u64 i = 0; i < nA; i++) {
                     const u8* a = (side ? B : A) + i * kLineBytes;
                     Line e, act;
@@ -117,6 +117,9 @@ void algo_copy(Run& R, const Params& P) {
                             break;
                     }
                 }
+                if (!R.stop)
+                    R.mark_verified(side ? B : A, nA); // the source and the copy are marked separately
+            }
             R.sync();
         }
     });

@@ -371,6 +371,7 @@ struct SuiteDriver {
 
     // Tell the front-end and the log about the region, split it into one chunk per thread and zero it (first touch).
     void prepare_region() {
+        R.cover.reset(total); // before regionBytes is published: a front-end that sees the size may read the map
         R.layout.regionBytes.store(total, std::memory_order_release);
         R.log.emitf("memory %s, large pages: %s\n",
                     locked ? "locked"

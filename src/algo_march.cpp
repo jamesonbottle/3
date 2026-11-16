@@ -223,6 +223,9 @@ void algo_march(Run& R, const Params& P) {
                                          ("march el" + std::to_string(ei) + " r" + std::to_string(op.v)).c_str());
                         }
                     };
+                    bool verifies = false; // an element with an r op compares every line of the window
+                    for (const MOp& op : e.ops)
+                        verifies = verifies || op.t == 'r';
                     u64 cnt = 0;
                     for (u64 q0 = 0; q0 < w.n && !R.stop; q0 += j.burst) {
                         u64 qe = std::min(q0 + j.burst, w.n);
@@ -235,6 +238,8 @@ void algo_march(Run& R, const Params& P) {
                             cnt -= kTickLines;
                         }
                     }
+                    if (verifies && !R.stop)
+                        R.mark_verified(w.base, w.n);
                     _mm_sfence();
                     R.sync();
                     DDR5_INJECT(march_after_element, tid, ji, ei, w);

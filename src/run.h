@@ -13,6 +13,7 @@
 #include <thread>
 #include <type_traits>
 #include <vector>
+#include "coverage.h"
 #include "log.h"
 #include "order.h"
 #include "params.h"
@@ -178,6 +179,9 @@ struct Run {
                   // function of it
     Rng rng = Rng::Default; // hash mixer chosen in Settings; see mix64()
     Layout layout;
+    // Which pages of the region a finished verify has covered (coverage.h). run_suite sizes and clears it before the
+    // workers start (prepare_region, before it publishes regionBytes). Algos write it only through mark_verified().
+    CoverageMap cover;
     std::string testName;              // the running test; also the key into winctr
     std::map<std::string, u64> winctr; // per test name: how many windows earlier loops have used (rotates the windows)
     std::atomic<bool> stop{false};     // set by a front-end (Stop button, Ctrl-C), by report() on the first error in
@@ -189,6 +193,14 @@ struct Run {
         if (++t_vcount >= kTickLines)
             vflush();
     }
+    // Records that `lines` lines starting at `base` (inside the region) were all compared against their expected data.
+    // Call it once per verify walk, AFTER the walk, and only when it ran to the end: `if (!R.stop)
+    // R.mark_verified(..)`. walk() leaves early only because stop was set, and stop never goes back to false inside a
+    // run, so !stop after the walk means every line of it was compared. A walk cut short (or one that finished just as
+    // stop was set) marks nothing: coverage may be too low after a Stop, never too high. Pass the view that was
+    // VERIFIED (a cross or partner verify reads another thread's window, not its own). Only whole 4 KiB pages count
+    // (CoverageMap::mark).
+    void mark_verified(const u8* base, u64 lines) { cover.mark((u64)(base - layout.region), lines * kLineBytes); }
     void sync() {
 #ifdef DDR5_CHECK_SYNC
         t_syncs++;

@@ -121,6 +121,9 @@ void algo_fill(Run& R, const Params& P) {
                         if (!io::verify(a, e, act))
                             R.report(tid, a, e, act, "verify");
                     });
+                if (o.reads && !R.stop)
+                    R.mark_verified(vw.base,
+                                    vw.n); // every read pass ran to the end, so the whole verified window counts
             });
             R.sync();
         }

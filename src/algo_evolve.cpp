@@ -111,6 +111,8 @@ void algo_evolve(Run& R, const Params& P) {
                         if (!io::verify(a, e, act))
                             R.report(tid, a, e, act, "evolve-verify");
                     });
+                    if (!R.stop)
+                        R.mark_verified(vw.base, vw.n);
                     R.sync();
                 }
             });
